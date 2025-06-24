@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>双图表测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .chart-container {
+            background-color: #fff;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        #klineChart {
+            width: 100%;
+            height: 400px;
+        }
+        #volumeChart {
+            width: 100%;
+            height: 150px;
+        }
+        .controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+        }
+        .control-group {
+            display: inline-block;
+            margin-right: 20px;
+        }
+        label {
+            display: inline-block;
+            width: 80px;
+            font-weight: bold;
+        }
+        input, select, button {
+            padding: 5px 10px;
+            margin-left: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 4px;
+            color: #155724;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>股票K线图 - 双图表布局测试</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>股票代码:</label>
+                <input type="text" id="stockCode" value="002951" placeholder="例如：002951">
+            </div>
+            <div class="control-group">
+                <label>周期:</label>
+                <select id="period">
+                    <option value="D">日线</option>
+                    <option value="W">周线</option>
+                    <option value="M">月线</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>数量:</label>
+                <input type="number" id="limit" value="20" min="5" max="100">
+            </div>
+            <div class="control-group">
+                <button onclick="loadData()">加载数据</button>
+            </div>
+        </div>
+        
+        <div class="status" id="status">准备加载数据...</div>
+        
+        <!-- K线图容器 -->
+        <div class="chart-container">
+            <div id="klineChart"></div>
+        </div>
+        
+        <!-- 成交量图容器 -->
+        <div class="chart-container">
+            <div id="volumeChart"></div>
+        </div>
+    </div>
+
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.0.1/dist/lightweight-charts.standalone.production.js"></script>
+    
+    <script>
+        let klineChart;
+        let volumeChart;
+        let candleSeries;
+        let volumeSeries;
+        
+        function initCharts() {
+            // 创建K线图表
+            const klineContainer = document.getElementById('klineChart');
+            klineChart = LightweightCharts.createChart(klineContainer, {
+                width: klineContainer.clientWidth,
+                height: 400,
+                layout: {
+                    background: { color: '#ffffff' },
+                    textColor: '#333',
+                },
+                grid: {
+                    vertLines: { color: 'rgba(197, 203, 206, 0.5)' },
+                    horzLines: { color: 'rgba(197, 203, 206, 0.5)' },
+                },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                rightPriceScale: { borderColor: 'rgba(197, 203, 206, 0.8)' },
+                timeScale: {
+                    borderColor: 'rgba(197, 203, 206, 0.8)',
+                    timeVisible: true,
+                },
+            });
+
+            // 创建成交量图表
+            const volumeContainer = document.getElementById('volumeChart');
+            volumeChart = LightweightCharts.createChart(volumeContainer, {
+                width: volumeContainer.clientWidth,
+                height: 150,
+                layout: {
+                    background: { color: '#ffffff' },
+                    textColor: '#333',
+                },
+                grid: {
+                    vertLines: { color: 'rgba(197, 203, 206, 0.5)' },
+                    horzLines: { color: 'rgba(197, 203, 206, 0.5)' },
+                },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                rightPriceScale: { borderColor: 'rgba(197, 203, 206, 0.8)' },
+                timeScale: {
+                    borderColor: 'rgba(197, 203, 206, 0.8)',
+                    timeVisible: true,
+                },
+            });
+
+            // 创建K线系列
+            candleSeries = klineChart.addCandlestickSeries({
+                upColor: '#00da3c',
+                downColor: '#ec0000',
+                borderUpColor: '#00da3c',
+                borderDownColor: '#ec0000',
+                wickUpColor: '#00da3c',
+                wickDownColor: '#ec0000',
+            });
+
+            // 创建成交量系列
+            volumeSeries = volumeChart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: { type: 'volume' },
+            });
+
+            // 同步时间轴
+            let isUpdating = false;
+            klineChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+                if (range && !isUpdating) {
+                    isUpdating = true;
+                    volumeChart.timeScale().setVisibleLogicalRange(range);
+                    isUpdating = false;
+                }
+            });
+
+            volumeChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+                if (range && !isUpdating) {
+                    isUpdating = true;
+                    klineChart.timeScale().setVisibleLogicalRange(range);
+                    isUpdating = false;
+                }
+            });
+        }
+
+        function loadData() {
+            const stockCode = document.getElementById('stockCode').value;
+            const period = document.getElementById('period').value;
+            const limit = document.getElementById('limit').value;
+
+            document.getElementById('status').textContent = '正在加载数据...';
+
+            fetch(`/api/kline?code=${stockCode}&period=${period}&limit=${limit}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('status').textContent = '加载失败: ' + data.error;
+                        return;
+                    }
+
+                    console.log('原始数据:', data); // 调试信息
+
+                    // 转换数据格式 - 修复时间戳问题
+                    const candleData = data.map(item => {
+                        const dateStr = item.date.split(' ')[0]; // 只取日期部分
+                        const timestamp = new Date(dateStr + 'T00:00:00').getTime() / 1000;
+
+                        return {
+                            time: timestamp,
+                            open: parseFloat(item.open),
+                            high: parseFloat(item.high),
+                            low: parseFloat(item.low),
+                            close: parseFloat(item.close),
+                        };
+                    });
+
+                    // 按时间排序
+                    candleData.sort((a, b) => a.time - b.time);
+
+                    const volumeData = data.map(item => {
+                        const dateStr = item.date.split(' ')[0];
+                        const timestamp = new Date(dateStr + 'T00:00:00').getTime() / 1000;
+
+                        return {
+                            time: timestamp,
+                            value: parseFloat(item.volume || 0),
+                            color: parseFloat(item.close) >= parseFloat(item.open) ?
+                                   'rgba(0, 150, 136, 0.8)' : 'rgba(255, 82, 82, 0.8)'
+                        };
+                    });
+
+                    // 按时间排序
+                    volumeData.sort((a, b) => a.time - b.time);
+
+                    console.log('处理后的K线数据:', candleData); // 调试信息
+                    console.log('处理后的成交量数据:', volumeData); // 调试信息
+
+                    // 设置数据
+                    candleSeries.setData(candleData);
+                    volumeSeries.setData(volumeData);
+
+                    // 自动调整视图
+                    klineChart.timeScale().fitContent();
+                    volumeChart.timeScale().fitContent();
+
+                    document.getElementById('status').textContent = `成功加载 ${data.length} 条数据`;
+                })
+                .catch(error => {
+                    document.getElementById('status').textContent = '加载失败: ' + error.message;
+                    console.error('加载错误:', error);
+                });
+        }
+
+        // 初始化
+        window.addEventListener('load', () => {
+            initCharts();
+            loadData();
+        });
+
+        // 窗口大小改变时调整图表
+        window.addEventListener('resize', () => {
+            if (klineChart && volumeChart) {
+                const klineContainer = document.getElementById('klineChart');
+                const volumeContainer = document.getElementById('volumeChart');
+                
+                klineChart.applyOptions({
+                    width: klineContainer.clientWidth,
+                    height: 400
+                });
+                
+                volumeChart.applyOptions({
+                    width: volumeContainer.clientWidth,
+                    height: 150
+                });
+            }
+        });
+    </script>
+</body>
+</html>

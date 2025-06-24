@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票K线图</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.1.3/css/bootstrap.min.css" rel="stylesheet">
+    <!-- 自定义CSS -->
+    <link href="/static/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row mt-3">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="input-group">
+                                    <span class="input-group-text">股票代码</span>
+                                    <input type="text" class="form-control" id="stockCode" placeholder="例如：002951" value="002951">
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="input-group">
+                                    <span class="input-group-text">周期</span>
+                                    <select class="form-select" id="period">
+                                        <option value="D">日线</option>
+                                        <option value="W">周线</option>
+                                        <option value="M">月线</option>
+                                        <option value="1">1分钟</option>
+                                        <option value="5">5分钟</option>
+                                        <option value="15">15分钟</option>
+                                        <option value="30">30分钟</option>
+                                        <option value="60">60分钟</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-2">
+                                <div class="input-group">
+                                    <span class="input-group-text">截止日期</span>
+                                    <input type="date" class="form-control" id="endDate" title="选择截止日期，只显示此日期之前的K线数据">
+                                </div>
+                            </div>
+                            <div class="col-md-2">
+                                <div class="input-group">
+                                    <span class="input-group-text">数量</span>
+                                    <input type="number" class="form-control" id="limit" value="1000" min="10" max="5000">
+                                </div>
+                            </div>
+                            <div class="col-md-1">
+                                <button class="btn btn-primary w-100" onclick="loadKlineData()">加载K线图</button>
+                            </div>
+                            <div class="col-md-1">
+                                <button class="btn btn-secondary w-100" onclick="testLoadHistoricalData()">测试历史数据</button>
+                            </div>
+                            <div class="col-md-1">
+                                <button class="btn btn-warning w-100" onclick="downloadLogs()">下载日志</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <h4 id="chartTitle" class="text-center mb-3"></h4>
+
+                        <!-- K线图容器 -->
+                        <div class="chart-container mb-2">
+                            <div id="klineChart" style="height: 400px; position: relative;">
+                                <!-- 加载指示器 -->
+                                <div id="loading" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1000; background-color: rgba(255,255,255,0.8); padding: 20px; border-radius: 5px; text-align: center;">
+                                    <div class="spinner-border text-primary" role="status">
+                                        <span class="visually-hidden">加载中...</span>
+                                    </div>
+                                    <div class="mt-2">数据加载中...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 成交量图容器 -->
+                        <div class="chart-container">
+                            <div id="volumeChart" style="height: 150px; position: relative;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.1.3/js/bootstrap.bundle.min.js"></script>
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.0.1/dist/lightweight-charts.standalone.production.js"></script>
+    <!-- 自定义JS -->
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
