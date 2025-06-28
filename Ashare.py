@@ -1,8 +1,113 @@
 #-*- coding:utf-8 -*-    --------------Ashare 股票行情数据双核心版( https://github.com/mpquant/Ashare )
 import json,requests,datetime,os;      import pandas as pd  #
+from datetime import timezone, timedelta
 
 # 导入配置
 from config import LOCAL_DATA_PATH, get_stock_filename, get_data_file_path
+
+# 设置北京时区
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+def aggregate_hourly_trading_data(df):
+    """
+    按照股市交易时间聚合小时线数据
+    上午：9:30-11:30 (2小时) → 9:30-10:30, 10:30-11:30
+    下午：13:00-15:00 (2小时) → 13:00-14:00, 14:00-15:00
+    """
+    if df.empty:
+        return df
+
+    print(f"开始按交易时间聚合小时线数据，原始数据{len(df)}条")
+
+    # 确保数据按时间排序
+    df = df.sort_values('date')
+
+    # 创建结果列表
+    result_data = []
+
+    # 按日期分组处理
+    df['date_only'] = df['date'].dt.date
+    for date, day_data in df.groupby('date_only'):
+        # 上午时段：9:30-11:30
+        morning_data = day_data[
+            (day_data['date'].dt.time >= pd.Timestamp('09:30:00').time()) &
+            (day_data['date'].dt.time < pd.Timestamp('11:30:00').time())
+        ]
+
+        if not morning_data.empty:
+            # 9:30-10:30
+            morning_first_hour = morning_data[
+                morning_data['date'].dt.time < pd.Timestamp('10:30:00').time()
+            ]
+            if not morning_first_hour.empty:
+                result_data.append({
+                    'date': pd.Timestamp(f"{date} 10:30:00"),
+                    'open': morning_first_hour['open'].iloc[0],
+                    'high': morning_first_hour['high'].max(),
+                    'low': morning_first_hour['low'].min(),
+                    'close': morning_first_hour['close'].iloc[-1],
+                    'volume': morning_first_hour['volume'].sum()
+                })
+
+            # 10:30-11:30
+            morning_second_hour = morning_data[
+                morning_data['date'].dt.time >= pd.Timestamp('10:30:00').time()
+            ]
+            if not morning_second_hour.empty:
+                result_data.append({
+                    'date': pd.Timestamp(f"{date} 11:30:00"),
+                    'open': morning_second_hour['open'].iloc[0],
+                    'high': morning_second_hour['high'].max(),
+                    'low': morning_second_hour['low'].min(),
+                    'close': morning_second_hour['close'].iloc[-1],
+                    'volume': morning_second_hour['volume'].sum()
+                })
+
+        # 下午时段：13:00-15:00（包含15:00）
+        afternoon_data = day_data[
+            (day_data['date'].dt.time >= pd.Timestamp('13:00:00').time()) &
+            (day_data['date'].dt.time <= pd.Timestamp('15:00:00').time())
+        ]
+
+        if not afternoon_data.empty:
+            # 13:00-14:00
+            afternoon_first_hour = afternoon_data[
+                afternoon_data['date'].dt.time < pd.Timestamp('14:00:00').time()
+            ]
+            if not afternoon_first_hour.empty:
+                result_data.append({
+                    'date': pd.Timestamp(f"{date} 14:00:00"),
+                    'open': afternoon_first_hour['open'].iloc[0],
+                    'high': afternoon_first_hour['high'].max(),
+                    'low': afternoon_first_hour['low'].min(),
+                    'close': afternoon_first_hour['close'].iloc[-1],
+                    'volume': afternoon_first_hour['volume'].sum()
+                })
+
+            # 14:00-15:00
+            afternoon_second_hour = afternoon_data[
+                afternoon_data['date'].dt.time >= pd.Timestamp('14:00:00').time()
+            ]
+            if not afternoon_second_hour.empty:
+                result_data.append({
+                    'date': pd.Timestamp(f"{date} 15:00:00"),
+                    'open': afternoon_second_hour['open'].iloc[0],
+                    'high': afternoon_second_hour['high'].max(),
+                    'low': afternoon_second_hour['low'].min(),
+                    'close': afternoon_second_hour['close'].iloc[-1],
+                    'volume': afternoon_second_hour['volume'].sum()
+                })
+
+    # 转换为DataFrame
+    if result_data:
+        result = pd.DataFrame(result_data)
+        result = result.sort_values('date')
+        print(f"交易时间聚合完成，返回{len(result)}条小时线数据")
+    else:
+        result = pd.DataFrame(columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        print("没有找到交易时间内的数据")
+
+    return result
 
 def aggregate_data_by_frequency(df, frequency, target_count=1000):
     """
@@ -68,8 +173,11 @@ def aggregate_data_by_frequency(df, frequency, target_count=1000):
         if minutes == 1:
             # 1分钟线直接返回
             result = df
+        elif minutes == 60:
+            # 小时线需要特殊处理，按照股市交易时间聚合
+            result = aggregate_hourly_trading_data(df)
         else:
-            # 聚合到指定分钟
+            # 其他分钟线聚合
             df_temp = df.copy()
             df_temp.set_index('date', inplace=True)
 
@@ -229,8 +337,11 @@ def get_price_local(code, end_date='', count=1000, frequency='1d', start_date=''
             df = df[df['date'] >= start_timestamp]
 
         if end_date:
-            end_timestamp = pd.to_datetime(end_date.split(' ')[0] if isinstance(end_date, str) else end_date)
+            # 将截止日期设置为当天的23:59:59，确保包含当天的所有数据
+            end_date_str = end_date.split(' ')[0] if isinstance(end_date, str) else str(end_date)
+            end_timestamp = pd.to_datetime(end_date_str + ' 23:59:59')
             df = df[df['date'] <= end_timestamp]
+            print(f"应用截止日期筛选: <= {end_timestamp}, 筛选后数据量: {len(df)}")
 
         # 根据频率聚合数据
         df = aggregate_data_by_frequency(df, frequency)

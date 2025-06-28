@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小时K线数据测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .test-section h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .data-table th, .data-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .data-table th {
+            background-color: #f2f2f2;
+        }
+        .highlight {
+            background-color: #fff3cd;
+        }
+        .error {
+            background-color: #f8d7da;
+        }
+        .success {
+            background-color: #d4edda;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>小时K线数据测试</h1>
+        
+        <div class="test-section">
+            <h3>测试控制</h3>
+            <button onclick="testMinuteData()">1. 获取分钟数据</button>
+            <button onclick="testHourlyAggregation()">2. 测试小时聚合</button>
+            <button onclick="testSpecificDate()">3. 测试2025-02-07数据</button>
+            <button onclick="clearLog()">清除日志</button>
+        </div>
+
+        <div class="test-section">
+            <h3>分钟数据</h3>
+            <div id="minuteDataSection">
+                <p>点击"获取分钟数据"按钮开始测试</p>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>小时K线聚合结果</h3>
+            <div id="hourlyDataSection">
+                <p>点击"测试小时聚合"按钮开始测试</p>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>详细日志</h3>
+            <div id="logSection" class="log">
+                测试日志将在这里显示...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let minuteData = [];
+        
+        function log(message) {
+            const logSection = document.getElementById('logSection');
+            const timestamp = new Date().toLocaleTimeString();
+            logSection.textContent += `[${timestamp}] ${message}\n`;
+            logSection.scrollTop = logSection.scrollHeight;
+        }
+        
+        function clearLog() {
+            document.getElementById('logSection').textContent = '测试日志已清除...\n';
+        }
+        
+        async function testMinuteData() {
+            log('开始获取分钟数据...');
+            
+            try {
+                const response = await fetch('/api/kline?code=002951&period=1&limit=1000&end_date=2025-02-07');
+                const data = await response.json();
+                
+                minuteData = data;
+                log(`获取到 ${data.length} 条分钟数据`);
+                
+                // 显示数据范围
+                if (data.length > 0) {
+                    log(`数据时间范围: ${data[0].date} 到 ${data[data.length - 1].date}`);
+                    
+                    // 筛选2025-02-07的数据
+                    const feb07Data = data.filter(item => item.date.startsWith('2025-02-07'));
+                    log(`2025-02-07的分钟数据: ${feb07Data.length} 条`);
+                    
+                    // 显示2025-02-07的数据表格
+                    displayMinuteData(feb07Data);
+                }
+                
+            } catch (error) {
+                log(`错误: ${error.message}`);
+            }
+        }
+        
+        function displayMinuteData(data) {
+            const section = document.getElementById('minuteDataSection');
+            
+            let html = `<h4>2025-02-07 分钟数据 (共${data.length}条)</h4>`;
+            html += '<table class="data-table">';
+            html += '<tr><th>时间</th><th>开盘</th><th>最高</th><th>最低</th><th>收盘</th><th>成交量</th></tr>';
+            
+            // 显示前10条和后10条
+            const showData = [...data.slice(0, 10), ...data.slice(-10)];
+            
+            showData.forEach((item, index) => {
+                const isLast10 = index >= 10;
+                const className = isLast10 ? 'highlight' : '';
+                html += `<tr class="${className}">`;
+                html += `<td>${item.date}</td>`;
+                html += `<td>${item.open}</td>`;
+                html += `<td>${item.high}</td>`;
+                html += `<td>${item.low}</td>`;
+                html += `<td>${item.close}</td>`;
+                html += `<td>${item.volume}</td>`;
+                html += '</tr>';
+            });
+            
+            html += '</table>';
+            section.innerHTML = html;
+        }
+        
+        async function testHourlyAggregation() {
+            if (minuteData.length === 0) {
+                log('请先获取分钟数据');
+                return;
+            }
+            
+            log('开始测试小时K线聚合...');
+            
+            // 筛选2025-02-07的数据
+            const feb07Data = minuteData.filter(item => item.date.startsWith('2025-02-07'));
+            log(`2025-02-07的分钟数据: ${feb07Data.length} 条`);
+            
+            // 按交易时间段聚合小时K线
+            const hourlyKlines = [];
+            
+            // 上午第一小时: 9:30-10:30
+            const morning1 = feb07Data.filter(item => {
+                const time = item.date.split(' ')[1];
+                return time >= '09:30:00' && time <= '10:30:00';
+            });
+            if (morning1.length > 0) {
+                hourlyKlines.push(aggregateToHourly(morning1, '10:30:00'));
+            }
+            
+            // 上午第二小时: 10:30-11:30
+            const morning2 = feb07Data.filter(item => {
+                const time = item.date.split(' ')[1];
+                return time > '10:30:00' && time <= '11:30:00';
+            });
+            if (morning2.length > 0) {
+                hourlyKlines.push(aggregateToHourly(morning2, '11:30:00'));
+            }
+            
+            // 下午第一小时: 13:00-14:00
+            const afternoon1 = feb07Data.filter(item => {
+                const time = item.date.split(' ')[1];
+                return time >= '13:00:00' && time <= '14:00:00';
+            });
+            if (afternoon1.length > 0) {
+                hourlyKlines.push(aggregateToHourly(afternoon1, '14:00:00'));
+            }
+            
+            // 下午第二小时: 14:00-15:00
+            const afternoon2 = feb07Data.filter(item => {
+                const time = item.date.split(' ')[1];
+                return time > '14:00:00' && time <= '15:00:00';
+            });
+            if (afternoon2.length > 0) {
+                hourlyKlines.push(aggregateToHourly(afternoon2, '15:00:00'));
+            }
+            
+            log(`聚合出 ${hourlyKlines.length} 根小时K线`);
+            displayHourlyData(hourlyKlines);
+        }
+        
+        function aggregateToHourly(minuteData, endTime) {
+            if (minuteData.length === 0) return null;
+            
+            const result = {
+                date: `2025-02-07 ${endTime}`,
+                open: parseFloat(minuteData[0].open),
+                high: Math.max(...minuteData.map(item => parseFloat(item.high))),
+                low: Math.min(...minuteData.map(item => parseFloat(item.low))),
+                close: parseFloat(minuteData[minuteData.length - 1].close),
+                volume: minuteData.reduce((sum, item) => sum + parseFloat(item.volume || 0), 0),
+                count: minuteData.length
+            };
+            
+            log(`聚合 ${endTime}: ${minuteData.length}条数据, 开盘${result.open}, 收盘${result.close}`);
+            
+            return result;
+        }
+        
+        function displayHourlyData(hourlyKlines) {
+            const section = document.getElementById('hourlyDataSection');
+            
+            let html = `<h4>2025-02-07 小时K线 (共${hourlyKlines.length}根)</h4>`;
+            html += '<table class="data-table">';
+            html += '<tr><th>时间</th><th>开盘</th><th>最高</th><th>最低</th><th>收盘</th><th>成交量</th><th>分钟数据条数</th></tr>';
+            
+            hourlyKlines.forEach(kline => {
+                html += '<tr>';
+                html += `<td>${kline.date}</td>`;
+                html += `<td>${kline.open}</td>`;
+                html += `<td>${kline.high}</td>`;
+                html += `<td>${kline.low}</td>`;
+                html += `<td>${kline.close}</td>`;
+                html += `<td>${kline.volume}</td>`;
+                html += `<td>${kline.count}</td>`;
+                html += '</tr>';
+            });
+            
+            html += '</table>';
+            section.innerHTML = html;
+        }
+        
+        async function testSpecificDate() {
+            log('开始测试特定日期的问题...');
+            
+            if (minuteData.length === 0) {
+                await testMinuteData();
+            }
+            
+            // 查找最后一根小时K线的数据
+            const feb07Data = minuteData.filter(item => item.date.startsWith('2025-02-07'));
+            const lastHourData = feb07Data.filter(item => {
+                const time = item.date.split(' ')[1];
+                return time > '14:00:00' && time <= '15:00:00';
+            });
+            
+            log(`最后一小时(14:00-15:00)的分钟数据: ${lastHourData.length} 条`);
+            
+            if (lastHourData.length > 0) {
+                log('最后一小时的详细数据:');
+                lastHourData.forEach(item => {
+                    log(`  ${item.date}: 开${item.open} 高${item.high} 低${item.low} 收${item.close} 量${item.volume}`);
+                });
+                
+                const aggregated = aggregateToHourly(lastHourData, '15:00:00');
+                log(`聚合结果: 开${aggregated.open} 高${aggregated.high} 低${aggregated.low} 收${aggregated.close}`);
+                
+                // 检查是否有异常
+                if (aggregated.open !== parseFloat(lastHourData[0].open)) {
+                    log(`⚠️ 开盘价异常: 期望${lastHourData[0].open}, 实际${aggregated.open}`);
+                }
+                if (aggregated.close !== parseFloat(lastHourData[lastHourData.length - 1].close)) {
+                    log(`⚠️ 收盘价异常: 期望${lastHourData[lastHourData.length - 1].close}, 实际${aggregated.close}`);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

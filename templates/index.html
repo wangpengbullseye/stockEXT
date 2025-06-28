@@ -52,17 +52,73 @@
                             <div class="col-md-1">
                                 <button class="btn btn-primary w-100" onclick="loadKlineData()">加载K线图</button>
                             </div>
+                        </div>
+                        <div class="row mt-2">
                             <div class="col-md-1">
-                                <button class="btn btn-secondary w-100" onclick="testLoadHistoricalData()">测试历史数据</button>
+                                <button class="btn btn-success w-100" id="playPauseBtn" onclick="togglePlayback()">
+                                    <span id="playPauseIcon">▶️</span> 播放
+                                </button>
                             </div>
                             <div class="col-md-1">
+                                <button class="btn btn-danger w-100" id="stopBtn" onclick="stopAnimation()">
+                                    ⏹️ 停止
+                                </button>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="input-group">
+                                    <span class="input-group-text">播放速度</span>
+                                    <input type="range" class="form-control" id="speedSlider" min="1" max="20" value="5" oninput="updateSpeed()">
+                                    <span class="input-group-text" id="speedDisplay">5x</span>
+                                </div>
+                            </div>
+                            <div class="col-md-2">
+                                <div class="input-group">
+                                    <span class="input-group-text">状态</span>
+                                    <span class="form-control" id="playbackStatus">已停止</span>
+                                </div>
+                            </div>
+                            <div class="col-md-2">
                                 <button class="btn btn-warning w-100" onclick="downloadLogs()">下载日志</button>
+                            </div>
+                            <div class="col-md-2">
+                                <button class="btn btn-secondary w-100" onclick="downloadLastKlineLogs()">下载K线日志</button>
+                            </div>
+                            <div class="col-md-2">
+                                <button class="btn btn-info w-100" onclick="resetAnimation()">重置</button>
+                            </div>
+                            <div class="col-md-1">
+                                <!-- 占位列，保持布局平衡 -->
+                            </div>
+                        </div>
+                        <div class="row mt-2">
+                            <div class="col-md-12">
+                                <div class="btn-group" role="group" aria-label="画线工具">
+                                    <button type="button" class="btn btn-outline-primary active" id="selectTool" onclick="setDrawingTool('select')" title="选择工具">
+                                        🖱️ 选择
+                                    </button>
+                                    <button type="button" class="btn btn-outline-primary" id="trendLineTool" onclick="setDrawingTool('trendLine')" title="射线">
+                                        📈 射线
+                                    </button>
+                                    <button type="button" class="btn btn-outline-primary" id="horizontalLineTool" onclick="setDrawingTool('horizontalLine')" title="水平线">
+                                        ➖ 水平线
+                                    </button>
+                                    <button type="button" class="btn btn-outline-primary" id="verticalLineTool" onclick="setDrawingTool('verticalLine')" title="垂直线">
+                                        ↕️ 垂直线
+                                    </button>
+                                    <button type="button" class="btn btn-outline-primary" id="rectangleTool" onclick="setDrawingTool('rectangle')" title="矩形">
+                                        ⬜ 矩形
+                                    </button>
+                                    <button type="button" class="btn btn-outline-warning" id="deleteTool" onclick="setDrawingTool('delete')" title="删除线条">
+                                        🗑️ 删除
+                                    </button>
+                                    <button type="button" class="btn btn-outline-danger" onclick="clearAllDrawings()" title="清除所有画线">
+                                        🧹 清除全部
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
                     <div class="card-body">
-                        <h4 id="chartTitle" class="text-center mb-3"></h4>
-
                         <!-- K线图容器 -->
                         <div class="chart-container mb-2">
                             <div id="klineChart" style="height: 400px; position: relative;">
