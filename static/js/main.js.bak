@@ -3262,9 +3262,8 @@ class DrawingTool {
         if (!param.point || !param.time) return;
 
         const price = this.candleSeries.coordinateToPrice(param.point.y);
-        if (price === null || !isFinite(price)) return;
+        if (price === null) return;
 
-        // 使用现有的改进捕捉逻辑
         const snapPoint = this.findSnapPoint(param.time, price, param.point);
         this.addPoint(snapPoint);
     }
@@ -3586,27 +3585,26 @@ class TrendLineTool extends DrawingTool {
                         return;
                     }
 
-                    // 向右：创建射线预览（减少视图干扰）
+                    // 保存当前视图状态（在计算前保存）
+                    const currentVisibleRange = this.chart.timeScale().getVisibleRange();
+
+                    // 向右：创建射线预览（使用完整的边界交点计算，带日志）
                     console.log('🎨 开始计算射线预览...');
-
-                    // 标记视图更新状态，防止删除模式干扰
-                    if (window.drawingToolSystem) {
-                        window.drawingToolSystem.isViewUpdating = true;
-                    }
-
                     const previewData = this.calculateRayData(point1, point2);
 
                     // 验证数据完整性
                     if (this.validateLineData(previewData)) {
                         this.previewSeries.setData(previewData);
-                        }
 
-                    // 清除视图更新标记
-                    setTimeout(() => {
-                        if (window.drawingToolSystem) {
-                            window.drawingToolSystem.isViewUpdating = false;
+                        // 立即恢复视图范围，防止预览影响视图
+                        try {
+                            if (currentVisibleRange) {
+                                this.chart.timeScale().setVisibleRange(currentVisibleRange);
+                            }
+                        } catch (error) {
+                            // 忽略恢复失败
+                        }
                     }
-                    }, 50);
                 }
             }
 
@@ -4170,31 +4168,40 @@ class TrendLineTool extends DrawingTool {
                 },
             });
 
-            // 标记视图更新状态
-            if (window.drawingToolSystem) {
-                window.drawingToolSystem.isViewUpdating = true;
-            }
+            // 在设置数据前保存当前视图状态
+            const currentVisibleRange = this.chart.timeScale().getVisibleRange();
+            const currentLogicalRange = this.chart.timeScale().getVisibleLogicalRange();
 
-            // 设置线条数据
             lineSeries.setData(lineData);
 
-            // 简化的视图保护逻辑，减少频繁的视图恢复
+            // 只在用户没有手动调整视图时才恢复视图范围
             if (!this.userAdjustedView) {
-                console.log('🔒 射线已创建，视图保护激活');
-
-                // 延迟清除视图更新标记，给图表足够时间稳定
-                setTimeout(() => {
-                    if (window.drawingToolSystem) {
-                        window.drawingToolSystem.isViewUpdating = false;
+                const restoreView = () => {
+                    try {
+                        if (currentVisibleRange) {
+                            this.chart.timeScale().setVisibleRange(currentVisibleRange);
+                        }
+                        if (currentLogicalRange) {
+                            this.chart.timeScale().setVisibleLogicalRange(currentLogicalRange);
+                        }
+                    } catch (error) {
+                        // 忽略错误
                     }
-                }, 100);
-            } else {
-                console.log('🎯 用户已手动调整视图，跳过视图保护');
+                };
 
-                // 立即清除视图更新标记
-                if (window.drawingToolSystem) {
-                    window.drawingToolSystem.isViewUpdating = false;
-                }
+                // 立即恢复视图范围
+                restoreView();
+
+                // 使用requestAnimationFrame在下一帧再次恢复
+                requestAnimationFrame(() => {
+                    restoreView();
+                    // 再次延迟恢复，确保稳定
+                    setTimeout(restoreView, 10);
+                });
+
+                console.log('🔒 已设置视图保护（用户未手动调整）');
+            } else {
+                console.log('🎯 用户已手动调整视图，跳过自动恢复');
             }
 
             const drawing = {
@@ -4500,7 +4507,6 @@ class DrawingToolSystem {
         this.deleteDistance = 5; // 删除检测距离（像素）
         this.lastProximityCheck = 0; // 防止过度调用
         this.isClearingHighlight = false; // 防止递归清除
-        this.isViewUpdating = false; // 视图更新状态标记
 
         this.setupEventListeners();
     }
@@ -4668,15 +4674,10 @@ class DrawingToolSystem {
 
         // 防止过度调用，限制检测频率
         const now = Date.now();
-        if (this.lastProximityCheck && now - this.lastProximityCheck < 100) {
-            return; // 增加限制间隔到100ms，减少频繁调用
+        if (this.lastProximityCheck && now - this.lastProximityCheck < 50) {
+            return; // 限制为每50ms检测一次
         }
         this.lastProximityCheck = now;
-
-        // 防止在视图更新期间进行距离计算
-        if (this.isViewUpdating) {
-            return;
-        }
 
         let closestDrawing = null;
         let minDistance = this.deleteDistance;
@@ -4685,13 +4686,9 @@ class DrawingToolSystem {
             return;
         }
 
-        // 缓存时间轴和价格轴的转换函数，避免重复调用
-        const timeScale = this.chart.timeScale();
-        const priceScale = this.candleSeries;
-
         for (const drawing of drawings) {
             try {
-                const distance = this.getDistanceToDrawingSafe(drawing, param, timeScale, priceScale);
+                const distance = this.getDistanceToDrawing(drawing, param);
 
                 if (isFinite(distance) && distance < minDistance) {
                     minDistance = distance;
@@ -4713,60 +4710,65 @@ class DrawingToolSystem {
         }
     }
 
-    // 安全的距离计算函数（避免触发视图更新）
-    getDistanceToDrawingSafe(drawing, param, timeScale, priceScale) {
+    // 计算鼠标到线条的距离
+    getDistanceToDrawing(drawing, param) {
         try {
+            const timeScale = this.chart.timeScale();
+
             switch (drawing.type) {
                 case 'horizontalLine':
                     // 水平线距离计算
-                    const lineY = priceScale.priceToCoordinate(drawing.price);
-                    if (lineY === null || !isFinite(lineY)) return Infinity;
+                    const lineY = this.candleSeries.priceToCoordinate(drawing.price);
+                    if (lineY === null) return Infinity;
                     return Math.abs(param.point.y - lineY);
 
                 case 'trendLine':
-                    // 射线距离计算 - 使用缓存的坐标避免重复转换
+                    // 射线距离计算
                     if (!drawing.points || drawing.points.length < 2) return Infinity;
-
-                    // 使用原始点进行距离计算，避免使用可能导致视图变化的数据
-                    const point1 = drawing.points[0];
-                    const point2 = drawing.points[1];
-
-                    return this.getDistanceToLineSafe(point1, point2, param, timeScale, priceScale);
+                    // 对于射线，使用实际绘制的数据来计算距离
+                    if (drawing.data && drawing.data.length >= 2) {
+                        const startPoint = { time: drawing.data[0].time, price: drawing.data[0].value };
+                        const endPoint = { time: drawing.data[drawing.data.length - 1].time, price: drawing.data[drawing.data.length - 1].value };
+                        return this.getDistanceToLine(startPoint, endPoint, param, timeScale);
+                    }
+                    return this.getDistanceToLine(drawing.points[0], drawing.points[1], param, timeScale);
 
                 case 'verticalLine':
                     // 垂直线距离计算
                     const lineX = timeScale.timeToCoordinate(drawing.time);
-                    if (lineX === null || !isFinite(lineX)) return Infinity;
+                    if (lineX === null) return Infinity;
                     return Math.abs(param.point.x - lineX);
 
                 case 'rectangle':
                     // 矩形距离计算（到边框的距离）
                     if (!drawing.points || drawing.points.length < 2) return Infinity;
-                    return this.getDistanceToRectangleSafe(drawing.points[0], drawing.points[1], param, timeScale, priceScale);
+                    return this.getDistanceToRectangle(drawing.points[0], drawing.points[1], param, timeScale);
 
                 default:
                     return Infinity;
             }
         } catch (error) {
-            console.warn('⚠️ 安全距离计算失败:', error.message);
+            console.error('❌ 计算距离失败:', error);
             return Infinity;
         }
     }
 
-    // 计算鼠标到线条的距离（保留原函数作为备用）
-    getDistanceToDrawing(drawing, param) {
-        const timeScale = this.chart.timeScale();
-        return this.getDistanceToDrawingSafe(drawing, param, timeScale, this.candleSeries);
-    }
+    // 计算点到线段的距离（安全版本）
+    getDistanceToLine(point1, point2, mouseParam, timeScale) {
+        try {
+            // 防止递归调用，使用缓存的坐标转换
+            let x1, y1, x2, y2;
 
-    // 安全的线段距离计算（避免触发视图更新）
-    getDistanceToLineSafe(point1, point2, mouseParam, timeScale, priceScale) {
+            // 安全的坐标转换
             try {
-            // 使用静态坐标转换，避免触发图表更新
-            const x1 = timeScale.timeToCoordinate(point1.time);
-            const y1 = priceScale.priceToCoordinate(point1.price);
-            const x2 = timeScale.timeToCoordinate(point2.time);
-            const y2 = priceScale.priceToCoordinate(point2.price);
+                x1 = timeScale.timeToCoordinate(point1.time);
+                y1 = this.candleSeries.priceToCoordinate(point1.price);
+                x2 = timeScale.timeToCoordinate(point2.time);
+                y2 = this.candleSeries.priceToCoordinate(point2.price);
+            } catch (coordError) {
+                console.warn('⚠️ 坐标转换失败:', coordError.message);
+                return Infinity;
+            }
 
             // 验证坐标有效性
             if (x1 === null || y1 === null || x2 === null || y2 === null ||
@@ -4816,36 +4818,25 @@ class DrawingToolSystem {
 
             return isFinite(distance) ? distance : Infinity;
         } catch (error) {
-            console.warn('⚠️ 安全线段距离计算失败:', error.message);
+            console.warn('⚠️ 计算线段距离失败:', error.message);
             return Infinity;
         }
     }
 
-    // 计算点到线段的距离（保留原函数）
-    getDistanceToLine(point1, point2, mouseParam, timeScale) {
-        return this.getDistanceToLineSafe(point1, point2, mouseParam, timeScale, this.candleSeries);
-    }
-
-    // 安全的矩形距离计算
-    getDistanceToRectangleSafe(point1, point2, mouseParam, timeScale, priceScale) {
+    // 计算点到矩形的距离
+    getDistanceToRectangle(point1, point2, mouseParam, timeScale) {
         try {
             const x1 = timeScale.timeToCoordinate(Math.min(point1.time, point2.time));
-            const y1 = priceScale.priceToCoordinate(Math.max(point1.price, point2.price));
+            const y1 = this.candleSeries.priceToCoordinate(Math.max(point1.price, point2.price));
             const x2 = timeScale.timeToCoordinate(Math.max(point1.time, point2.time));
-            const y2 = priceScale.priceToCoordinate(Math.min(point1.price, point2.price));
+            const y2 = this.candleSeries.priceToCoordinate(Math.min(point1.price, point2.price));
 
-            if (x1 === null || y1 === null || x2 === null || y2 === null ||
-                !isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2)) {
+            if (x1 === null || y1 === null || x2 === null || y2 === null) {
                 return Infinity;
             }
 
             const mouseX = mouseParam.point.x;
             const mouseY = mouseParam.point.y;
-
-            // 验证鼠标坐标
-            if (!isFinite(mouseX) || !isFinite(mouseY)) {
-                return Infinity;
-            }
 
             // 计算到矩形边框的最小距离
             const distances = [
@@ -4870,14 +4861,9 @@ class DrawingToolSystem {
 
             return Math.min(...distances, ...cornerDistances);
         } catch (error) {
-            console.warn('⚠️ 安全矩形距离计算失败:', error.message);
+            console.error('❌ 计算矩形距离失败:', error);
             return Infinity;
         }
-    }
-
-    // 计算点到矩形的距离（保留原函数）
-    getDistanceToRectangle(point1, point2, mouseParam, timeScale) {
-        return this.getDistanceToRectangleSafe(point1, point2, mouseParam, timeScale, this.candleSeries);
     }
 
     // 高亮显示线条
