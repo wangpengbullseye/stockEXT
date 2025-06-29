@@ -13,6 +13,14 @@ let startDate = null;
 let checkDataCallDepth = 0; // 防止递归调用的计数器
 let lastKlineDate = null; // 记录最后一根K线的日期
 
+// 步幅相关变量
+let strideLastKlineTimestamp = 0
+let strideData = [];
+let currentKLine = null; // 当前的k线
+let currentStride = 0; // 当前步幅累加值
+let strideTarget = 0; // 目标步幅值
+let strideEnabled = false; // 是否启用步幅功能
+
 // 动画播放相关变量
 let isPlaying = false; // 是否正在播放
 let playbackSpeed = 5; // 播放速度倍数
@@ -1537,8 +1545,9 @@ document.addEventListener('DOMContentLoaded', function() {
         loadKlineData();
     });
 
-    // 添加键盘事件监听器
-    document.addEventListener('keydown', handleKeyboardEvent);
+    // 重新启用带调试的新事件监听器
+    document.addEventListener('keydown', handleKeyboardEventWithStride);
+    console.log('已启用带步幅选择的键盘事件监听器');
 
     // 加载K线数据
     loadKlineData();
@@ -1594,7 +1603,7 @@ function getNextKlineTime(lastKline, period) {
         case '60': // 小时线
             // 使用原始的K线数据中的日期字符串来避免时区问题
             const originalDate = lastKline.date;
-            console.log('🕐 使用原始日期字符串:', originalDate);
+            console.log('� 使用原始日期字符串:', originalDate);
             console.log('🔍 完整的lastKline对象:', lastKline);
 
             if (originalDate) {
@@ -1763,7 +1772,51 @@ function getLastKlineDate() {
     return date.toISOString().split('T')[0];
 }
 
-// 键盘事件处理函数
+// 新的键盘事件处理函数（带步幅选择）
+function handleKeyboardEventWithStride(event) {
+    // 处理右方向键和左方向键
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+        event.preventDefault(); // 阻止默认行为
+
+        const isRightKey = event.key === 'ArrowRight';
+        logToFile('INFO', `🔑 检测到${isRightKey ? '右' : '左'}方向键按下`);
+        console.log('键盘事件触发，按键:', event.key);
+
+        if (isRightKey) {
+            // 获取当前步幅选择
+            const strideSelect = document.getElementById('stride');
+            const periodSelect = document.getElementById('period');
+            
+            if (!strideSelect || !periodSelect) {
+                console.error('步幅或周期选择元素未找到');
+                addNextKline();
+                return;
+            }
+
+            const selectedStride = parseInt(strideSelect.value) || 0;
+            const selectedPeriod = periodSelect.value;
+            
+            console.log('当前步幅:', selectedStride, '当前周期:', selectedPeriod);
+            
+            // 如果是日线且选择了步幅
+            if (selectedPeriod === 'D' && selectedStride > 0) {
+                strideTarget = selectedStride;
+                logToFile('INFO', `🚀 启用步幅功能，步幅为${selectedStride}`);
+                strideEnabled = true;
+                addNextKlineStride(strideEnabled,strideTarget);
+            } else {
+                // 非日线或未选择步幅，保持原有逻辑
+                strideEnabled = false;
+                addNextKline();
+            }
+        } else {
+            // 左方向键逻辑保持不变
+            // ...
+        }
+    }
+}
+
+// 旧的键盘事件处理函数（保留兼容）
 function handleKeyboardEvent(event) {
     // 处理右方向键和左方向键
     if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
@@ -1782,6 +1835,30 @@ function handleKeyboardEvent(event) {
         }
     }
 }
+function addNextKlineStride(strideEnabled, strideTarget) {
+    if (!allCandleData || allCandleData.length === 0) {
+        logToFile('WARN', '⚠️ 没有K线数据，无法添加下一根');
+        return;
+    }
+    let reduceDays = 0;
+    if(currentStride == 240)
+    {
+        reduceDays = 1;
+        currentStride = 0;
+    }
+    else if(currentStride == 0)
+    {
+        reduceDays = 1;
+    }
+    else{
+        reduceDays = 2;
+    }
+    const currentPeriod = document.getElementById('period').value;
+    const lastKline = allCandleData[allCandleData.length - reduceDays];
+    
+    // 使用新的基于数据的方法查找下一根K线
+    findNextKlineFromDataStride(lastKline, currentPeriod,strideEnabled, strideTarget);
+}
 
 // 添加下一根K线
 function addNextKline() {
@@ -1789,6 +1866,7 @@ function addNextKline() {
         logToFile('WARN', '⚠️ 没有K线数据，无法添加下一根');
         return;
     }
+    
 
     const currentPeriod = document.getElementById('period').value;
     const lastKline = allCandleData[allCandleData.length - 1];
@@ -1809,6 +1887,148 @@ function addNextKline() {
 
     // 使用新的基于数据的方法查找下一根K线
     findNextKlineFromData(lastKline, currentPeriod);
+}
+async function findNextKlineFromDataStride(lastKline, period, strideEnabled, strideTarget) {
+    
+    if(currentStride == 0)
+    {
+        const stockCode = document.getElementById('stockCode').value.trim();
+        if (!stockCode) {
+            logToFile('ERROR', '❌ 股票代码为空');
+            return;
+        }
+        // 获取当前截止日期
+        const endDateInput = document.getElementById('endDate');
+        const currentEndDate = endDateInput.value;
+
+        // 获取最后一根K线的日期
+        const lastKlineDate = lastKline.date ? lastKline.date.split(' ')[0] : new Date(lastKline.time * 1000).toISOString().split('T')[0];
+
+        console.log('📅 智能计算下一根K线:', {
+            currentEndDate: currentEndDate,
+            lastKlineDate: lastKlineDate,
+            period: period
+        });
+
+        // 为了获取足够的数据，我们需要请求包含下一个交易日的数据
+        const nextTradingDay = getNextTradingDay(currentEndDate);
+        console.log('📅 请求数据到下一个交易日以确保有足够数据:', nextTradingDay);
+
+        console.log('📅 查找下一根K线:', {
+            currentEndDate: currentEndDate,
+            nextTradingDay: nextTradingDay,
+            period: period
+        });
+
+        if (!nextTradingDay) {
+            logToFile('ERROR', '❌ 无法计算下一个交易日');
+            return;
+        }
+
+        // 请求包含下一个交易日的数据，确保有足够的分钟数据
+        try {
+            const apiUrl = '/api/kline?code=${stockCode}&period=1&limit=1000&end_date=${nextTradingDay}';
+            console.log('🌐 请求包含下一个交易日的分钟数据:', apiUrl);
+
+            const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`网络请求错误: ${response.status} ${response.statusText}`);
+            }
+
+            const minuteData = await response.json();
+            strideData = minuteData;
+            if (minuteData && minuteData.length > 0) {
+                console.log('✅ 获取到下一个交易日的分钟数据:', minuteData.length, '条');
+
+                // 检查分钟数据的日期范围
+                console.log('📅 分钟数据日期范围:');
+                console.log('  第一条:', minuteData[0].date);
+                console.log('  最后一条:', minuteData[minuteData.length - 1].date);
+                console.log('  期望日期: 2025-02-10');
+
+                // 从分钟数据中聚合出下一根K线
+                let nextKline;
+                if(strideTarget == 240)
+                {
+                    // 日线：直接使用新的日线聚合函数
+                    nextKline = aggregateNextDailyKline(minuteData, lastKlineDate);
+                }
+                else 
+                {
+                    currentStride += strideTarget;
+                    // 其他周期：使用原有逻辑
+                    nextKline = aggregateNextKlineFromMinuteData(minuteData, period, lastKline, currentStride);
+                }
+
+                if (nextKline) {
+                    console.log('✅ 聚合出的新K线:', nextKline);
+
+                    // 验证新K线的时间戳是否正确
+                    // 使用与addKlineToChart相同的时间戳转换逻辑
+                    let newKlineTimestamp;
+                    if (period === '1') {
+                        newKlineTimestamp = new Date(nextKline.date).getTime() / 1000;
+                    } else {
+                        // 使用UTC时间但加上8小时偏移，这样显示时会正确
+                        const dateTime = nextKline.date.replace(' ', 'T');
+                        const localDate = new Date(dateTime);
+                        // 减去8小时的偏移，这样TradingView显示时会加回8小时
+                        newKlineTimestamp = (localDate.getTime() + 8 * 60 * 60 * 1000) / 1000;
+                    }
+
+                    console.log('🕐 新K线时间戳转换详细信息:');
+                    console.log('  原始日期:', nextKline.date);
+                    console.log('  转换后的dateTime:', nextKline.date.replace(' ', 'T'));
+                    console.log('  新K线时间戳:', newKlineTimestamp);
+                    console.log('  转换回的日期:', new Date(newKlineTimestamp * 1000).toISOString());
+                    console.log('  期望的日期应该根据当前K线计算');
+
+                    const lastKlineTimestamp = allCandleData[allCandleData.length - 1].time;
+                    strideLastKlineTimestamp = lastKlineTimestamp;
+                    const comparisonResult = {
+                        lastKlineTimestamp: lastKlineTimestamp,
+                        lastKlineDate: new Date(lastKlineTimestamp * 1000).toISOString(),
+                        newKlineTimestamp: newKlineTimestamp,
+                        newKlineDate: new Date(newKlineTimestamp * 1000).toISOString(),
+                        isNewer: newKlineTimestamp > lastKlineTimestamp
+                    };
+
+                    console.log('🕐 时间戳比较详细信息:');
+                    console.log('  最后一根K线时间戳:', lastKlineTimestamp, '→', new Date(lastKlineTimestamp * 1000).toISOString());
+                    console.log('  新K线时间戳:', newKlineTimestamp, '→', new Date(newKlineTimestamp * 1000).toISOString());
+                    console.log('  新K线是否更新:', newKlineTimestamp > lastKlineTimestamp);
+                    console.log('  时间差（秒）:', newKlineTimestamp - lastKlineTimestamp);
+
+                    if (newKlineTimestamp > lastKlineTimestamp) {
+                        // 添加到图表
+                        addKlineToChart(nextKline, period);
+
+                        // 更新截止日期
+                        updateEndDateFromKline(nextKline.date);
+
+                        logToFile('INFO', '✅ 成功添加下一根K线');
+                    } else {
+                        logToFile('ERROR', '❌ 新K线时间戳不正确，无法添加');
+                    }
+                } else {
+                    logToFile('WARN', '⚠️ 无法从分钟数据聚合出K线');
+                }
+            } else {
+                logToFile('WARN', '⚠️ 下一个交易日没有数据');
+            }
+
+        } catch (error) {
+            logToFile('ERROR', '❌ 获取下一个交易日数据失败:', error);
+        }
+    }
+    else
+    {
+        currentStride += strideTarget;
+        let nextKline = aggregateNextKlineFromMinuteData(strideData, period, lastKline, 240);
+        currentStride = 240;
+        UpdateLastKlineToChart(nextKline, period);
+        // 其他周期：使用原有逻辑
+    }
 }
 
 // 基于现有数据查找下一根K线
@@ -1942,12 +2162,12 @@ async function findNextKlineFromData(lastKline, period) {
 }
 
 // 从分钟数据聚合出下一根K线
-function aggregateNextKlineFromMinuteData(minuteData, period, lastKline) {
+function aggregateNextKlineFromMinuteData(minuteData, period, lastKline, minutes = 0) {
     if (!minuteData || minuteData.length === 0) {
         return null;
     }
 
-    console.log('🔄 开始聚合下一根K线，周期:', period);
+    console.log('� 开始聚合下一根K线，周期:', period);
     console.log('🔍 最后一根K线:', lastKline.date);
 
     // 按时间排序
@@ -1982,6 +2202,8 @@ function aggregateNextKlineFromMinuteData(minuteData, period, lastKline) {
 
         case '1': // 1分钟线：获取下一根1分钟K线
             return aggregateNext1MinKline(minuteData, lastKlineDate);
+        case 'X':
+            return aggregateNextPeriodKline(minuteData, lastTime, lastDateOnly, minutes);
 
         default:
             console.log('⚠️ 未支持的周期:', period);
@@ -1990,7 +2212,7 @@ function aggregateNextKlineFromMinuteData(minuteData, period, lastKline) {
 }
 
 // 聚合下一根小时K线
-function aggregateNextHourlyKline(minuteData, lastTime, lastDateOnly) {
+function aggregateNextPeriodKline(minuteData, lastTime, lastDateOnly, minutes) {
     console.log('📊 聚合下一根小时K线:', { lastTime, lastDateOnly });
 
     // 找到最后一根K线在分钟数据中的位置
@@ -2017,7 +2239,7 @@ function aggregateNextHourlyKline(minuteData, lastTime, lastDateOnly) {
 
     // 从最后一根K线的下一分钟开始，取60分钟的数据
     const startIndex = lastKlineIndex + 1;
-    const endIndex = startIndex + 60; // 60分钟 = 1小时
+    const endIndex = startIndex + minutes; // 60分钟 = 1小时
 
     console.log('📊 计算下一根小时K线的数据范围:', {
         startIndex: startIndex,
@@ -2039,7 +2261,7 @@ function aggregateNextHourlyKline(minuteData, lastTime, lastDateOnly) {
         return null;
     }
 
-    console.log(`📊 聚合下一根小时K线: ${nextHourData.length} 条分钟数据`);
+    console.log(`� 聚合下一根小时K线: ${nextHourData.length} 条分钟数据`);
     console.log('📅 数据时间范围:', {
         first: nextHourData[0].date,
         last: nextHourData[nextHourData.length - 1].date
@@ -2090,10 +2312,10 @@ function aggregateNextHourlyKline(minuteData, lastTime, lastDateOnly) {
     };
 
     console.log('✅ 最终聚合结果:', result);
-    console.log('🔍 聚合结果详细检查:');
-    console.log(`  📅 日期: ${result.date}`);
+    console.log('� 聚合结果详细检查:');
+    console.log(`  � 日期: ${result.date}`);
     console.log(`  📈 开盘: ${result.open} (应该等于第一条数据: ${nextHourData[0].open})`);
-    console.log(`  📈 收盘: ${result.close} (应该等于最后一条数据: ${nextHourData[nextHourData.length - 1].close})`);
+    console.log(`  � 收盘: ${result.close} (应该等于最后一条数据: ${nextHourData[nextHourData.length - 1].close})`);
     console.log(`  📊 最高: ${result.high}`);
     console.log(`  📊 最低: ${result.low}`);
     console.log(`  📊 成交量: ${result.volume}`);
@@ -2464,9 +2686,7 @@ async function fetchSingleKline(klineTime, period) {
         logToFile('ERROR', '❌ 获取单根K线数据失败:', error);
     }
 }
-
-// 将新K线添加到图表
-function addKlineToChart(klineData, period) {
+function  UpdateLastKlineToChart(klineData, period) {
     // 转换时间戳
     let timestamp;
     console.log('🕐 转换K线时间戳:', {
@@ -2484,18 +2704,92 @@ function addKlineToChart(klineData, period) {
         timestamp = (localDate.getTime() + 8 * 60 * 60 * 1000) / 1000;
     }
 
-    console.log('🕐 转换结果:', {
+    console.log('� 转换结果:', {
         timestamp: timestamp,
         convertedDate: new Date(timestamp * 1000).toISOString()
     });
 
-    console.log('📊 准备添加到图表的K线数据:');
-    console.log(`  📅 原始日期: ${klineData.date}`);
-    console.log(`  🕐 时间戳: ${timestamp}`);
+    console.log('� 准备添加到图表的K线数据:');
+    console.log(`  � 原始日期: ${klineData.date}`);
+    console.log(`  � 时间戳: ${timestamp}`);
     console.log(`  📈 开盘价: ${klineData.open}`);
     console.log(`  📈 最高价: ${klineData.high}`);
     console.log(`  📈 最低价: ${klineData.low}`);
-    console.log(`  📈 收盘价: ${klineData.close}`);
+    console.log(`  � 收盘价: ${klineData.close}`);
+    console.log(`  📊 成交量: ${klineData.volume}`);
+
+    // 创建新的K线数据
+    const newCandle = {
+        time: timestamp,
+        open: parseFloat(klineData.open),
+        high: parseFloat(klineData.high),
+        low: parseFloat(klineData.low),
+        close: parseFloat(klineData.close),
+        volume: parseFloat(klineData.volume || 0),
+        date: klineData.date
+    };
+
+    // 添加到全局数据数组
+    //allCandleData.push(newCandle);
+    allCandleData.pop();
+    allCandleData.push(newCandle);
+
+    // 更新图表（只添加新数据，不重新设置所有数据）
+    if (candleSeries) {
+        candleSeries.update({
+            time: timestamp,
+            open: newCandle.open,
+            high: newCandle.high,
+            low: newCandle.low,
+            close: newCandle.close
+        });
+    }
+
+    // 更新成交量
+    if (volumeSeries) {
+        volumeSeries.update({
+            time: timestamp,
+            value: newCandle.volume,
+            color: newCandle.close >= newCandle.open ? 'rgba(0, 150, 136, 0.8)' : 'rgba(255, 82, 82, 0.8)'
+        });
+    }
+
+    // 更新移动平均线
+    updateMovingAveragesForNewKline();
+
+    logToFile('INFO', '✅ 新K线已添加到图表');
+}
+// 将新K线添加到图表
+function  addKlineToChart(klineData, period) {
+    // 转换时间戳
+    let timestamp;
+    console.log('🕐 转换K线时间戳:', {
+        originalDate: klineData.date,
+        period: period
+    });
+
+    if (period === '1') {
+        timestamp = new Date(klineData.date).getTime() / 1000;
+    } else {
+        // 使用UTC时间但加上8小时偏移，这样显示时会正确
+        const dateTime = klineData.date.replace(' ', 'T');
+        const localDate = new Date(dateTime);
+        // 减去8小时的偏移，这样TradingView显示时会加回8小时
+        timestamp = (localDate.getTime() + 8 * 60 * 60 * 1000) / 1000;
+    }
+
+    console.log('� 转换结果:', {
+        timestamp: timestamp,
+        convertedDate: new Date(timestamp * 1000).toISOString()
+    });
+
+    console.log('� 准备添加到图表的K线数据:');
+    console.log(`  � 原始日期: ${klineData.date}`);
+    console.log(`  � 时间戳: ${timestamp}`);
+    console.log(`  📈 开盘价: ${klineData.open}`);
+    console.log(`  📈 最高价: ${klineData.high}`);
+    console.log(`  📈 最低价: ${klineData.low}`);
+    console.log(`  � 收盘价: ${klineData.close}`);
     console.log(`  📊 成交量: ${klineData.volume}`);
 
     // 创建新的K线数据
@@ -2632,7 +2926,7 @@ async function testFeb07HourlyData() {
 
         // 筛选2025-02-07的数据
         const feb07Data = minuteData.filter(item => item.date.startsWith('2025-02-07'));
-        console.log(`📅 2025-02-07的分钟数据: ${feb07Data.length} 条`);
+        console.log(`� 2025-02-07的分钟数据: ${feb07Data.length} 条`);
 
         // 显示最后一小时的数据
         const lastHourData = feb07Data.filter(item => {
@@ -2640,7 +2934,7 @@ async function testFeb07HourlyData() {
             return time > '14:00:00' && time <= '15:00:00';
         });
 
-        console.log(`🕐 最后一小时(14:00-15:00)的分钟数据: ${lastHourData.length} 条`);
+        console.log(`� 最后一小时(14:00-15:00)的分钟数据: ${lastHourData.length} 条`);
         console.log('📋 最后一小时的详细数据:');
 
         lastHourData.forEach((item, index) => {
@@ -2700,7 +2994,7 @@ async function testBackendHourlyAggregation() {
 
         // 筛选2025-02-07的分钟数据
         const feb07MinuteData = minuteData.filter(item => item.date.startsWith('2025-02-07'));
-        console.log(`📅 2025-02-07的分钟数据: ${feb07MinuteData.length} 条`);
+        console.log(`� 2025-02-07的分钟数据: ${feb07MinuteData.length} 条`);
 
         // 筛选14:00-15:00的分钟数据
         const lastHourMinuteData = feb07MinuteData.filter(item => {
@@ -2708,7 +3002,7 @@ async function testBackendHourlyAggregation() {
             return time > '14:00:00' && time <= '15:00:00';
         });
 
-        console.log(`🕐 14:00-15:00的分钟数据: ${lastHourMinuteData.length} 条`);
+        console.log(`� 14:00-15:00的分钟数据: ${lastHourMinuteData.length} 条`);
         console.log('📋 详细数据:');
         lastHourMinuteData.forEach((item, index) => {
             console.log(`  ${index + 1}. ${item.date}: 开${item.open} 高${item.high} 低${item.low} 收${item.close} 量${item.volume}`);
@@ -3271,17 +3565,17 @@ class DrawingTool {
 
     // 查找捕捉点（改进版，带详细日志）
     findSnapPoint(time, price, screenPoint) {
-        console.log(`🎯 开始捕捉点计算: 鼠标(${screenPoint.x}, ${screenPoint.y}), 时间=${time}, 价格=${price.toFixed(4)}`);
+        //console.log(`🎯 开始捕捉点计算: 鼠标(${screenPoint.x}, ${screenPoint.y}), 时间=${time}, 价格=${price.toFixed(4)}`);
 
         // 验证输入参数
         if (!time || !price || !screenPoint) {
-            console.log('  ❌ 输入参数无效');
+            //console.log('  ❌ 输入参数无效');
             return { time, price, isSnapped: false };
         }
 
         // 获取当前时间附近的K线数据，并按时间距离排序
         const nearbyCandles = this.getNearbyCandles(time);
-        console.log(`  📊 找到 ${nearbyCandles.length} 根附近的K线`);
+        //console.log(`  📊 找到 ${nearbyCandles.length} 根附近的K线`);
 
         // 按时间距离排序，优先检查最近的K线
         nearbyCandles.sort((a, b) => {
@@ -3297,7 +3591,7 @@ class DrawingTool {
         };
         let minDistance = this.snapDistance;
 
-        console.log(`  🎯 捕捉距离阈值: ${minDistance}px`);
+        //console.log(`  🎯 捕捉距离阈值: ${minDistance}px`);
 
         for (const candle of nearbyCandles) {
             // 验证K线数据有效性
@@ -3312,7 +3606,7 @@ class DrawingTool {
             if (candleScreenX === null) continue;
 
             const timeDistance = Math.abs(screenPoint.x - candleScreenX);
-            console.log(`    K线时间=${candle.time}, 屏幕X=${candleScreenX}, 时间距离=${timeDistance.toFixed(1)}px`);
+            //console.log(`    K线时间=${candle.time}, 屏幕X=${candleScreenX}, 时间距离=${timeDistance.toFixed(1)}px`);
 
             // 检查所有四个价格点：开盘、收盘、最高、最低
             const pricePoints = [
@@ -3335,7 +3629,7 @@ class DrawingTool {
                     // 计算综合距离（时间 + 价格）
                     const totalDistance = Math.sqrt(timeDistance * timeDistance + priceDistance * priceDistance);
 
-                    console.log(`      ${point.name}=${point.price.toFixed(4)}, 屏幕Y=${screenY.toFixed(1)}, 价格距离=${priceDistance.toFixed(1)}px, 总距离=${totalDistance.toFixed(1)}px`);
+                    //console.log(`      ${point.name}=${point.price.toFixed(4)}, 屏幕Y=${screenY.toFixed(1)}, 价格距离=${priceDistance.toFixed(1)}px, 总距离=${totalDistance.toFixed(1)}px`);
 
                     if (totalDistance < minDistance) {
                         minDistance = totalDistance;
@@ -3348,7 +3642,7 @@ class DrawingTool {
                             candle: candle,
                             distance: totalDistance
                         };
-                        console.log(`      🎯 新的最佳捕捉: ${point.name}, 距离=${totalDistance.toFixed(1)}px`);
+                        //console.log(`      🎯 新的最佳捕捉: ${point.name}, 距离=${totalDistance.toFixed(1)}px`);
                     }
                 }
             }
@@ -3759,15 +4053,23 @@ class TrendLineTool extends DrawingTool {
             const screenX1 = this.chart.timeScale().timeToCoordinate(point1.time);
             const screenY1 = this.candleSeries.priceToCoordinate(point1.price);
             const screenX2 = this.chart.timeScale().timeToCoordinate(point2.time);
+            console.log('screenX2:'+ screenX2)
+            const timex =  this.chart.timeScale().coordinateToTime(screenX2);
+            console.log('timex:'+ timex)
+            console.log('point2.time:'+point2.time)
             const screenY2 = this.candleSeries.priceToCoordinate(point2.price);
             
             if (screenX1 === null || screenY1 === null || screenX2 === null || screenY2 === null) {
                 throw new Error('无法转换坐标');
             }
 
+            //const timeRange=this.chart.timeScale().getVisibleRange()
+            //const chartRight = this.chart.timeScale().timeToCoordinate(timeRange);
             // 2. 计算屏幕边界
-            const chartWidth = this.chart.options().width;
+            const chartWidth = this.chart.options().width - 55;
+            
             const chartHeight = this.chart.options().height;
+            
             const screenBoundaries = {
                 left: 0,
                 right: chartWidth,
@@ -3795,7 +4097,7 @@ class TrendLineTool extends DrawingTool {
             
             if (isRightward) {
                 // 向右射线：与右边界相交
-                intersectionX = screenBoundaries.right;
+                intersectionX = screenBoundaries.right-1;
                 intersectionY = screenY1 + slope * (intersectionX - screenX1);
                 
                 // 检查是否先与上/下边界相交
@@ -3824,11 +4126,13 @@ class TrendLineTool extends DrawingTool {
             // 5. 转换回价格-时间坐标
             const intersectionTime = this.chart.timeScale().coordinateToTime(intersectionX);
             const intersectionPrice = this.candleSeries.coordinateToPrice(intersectionY);
-            
-            if (intersectionTime === null || intersectionPrice === null) {
-                throw new Error('无法转换回坐标');
+            if (intersectionPrice === null) {
+                throw new Error('无法转换回坐标-price'+intersectionPrice);
             }
-
+            if (intersectionTime === null ) {
+                throw new Error('无法转换回坐标-time:'+intersectionX);
+            }
+  
             // 6. 创建射线数据
             const rayData = [
                 { time: point1.time, value: point1.price },
@@ -3918,6 +4222,7 @@ class TrendLineTool extends DrawingTool {
     }
 
     // 这个方法已被删除，因为新的calculateRayData方法在屏幕坐标系中直接计算交点
+    calculateRayBoundaryIntersection(point1, point2, boundaries, isRightward) {
         try {
             console.log('🔍 开始计算射线与边界交点:');
             console.log(`  起点: (${point1.time}, ${point1.price.toFixed(4)})`);
@@ -5343,7 +5648,7 @@ function cleanupProblematicLines() {
 
 // 手动初始化专业画线工具系统
 function initProfessionalDrawingSystem() {
-    console.log('🔧 手动初始化专业画线工具系统...');
+    console.log('� 手动初始化专业画线工具系统...');
 
     if (drawingToolSystem) {
         console.log('⚠️ 专业画线工具系统已存在，先清理...');
