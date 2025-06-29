@@ -14,12 +14,12 @@ let checkDataCallDepth = 0; // 防止递归调用的计数器
 let lastKlineDate = null; // 记录最后一根K线的日期
 
 // 步幅相关变量
-let strideLastKlineTimestamp = 0
-let strideData = [];
-let currentKLine = null; // 当前的k线
-let currentStride = 0; // 当前步幅累加值
-let strideTarget = 0; // 目标步幅值
-let strideEnabled = false; // 是否启用步幅功能
+// New stride variables
+let currentStrideInMinutes = 0; // Accumulated minutes for the day being stepped.
+let minuteDataForStepping = []; // Array of 1-minute k-lines for the specific day being constructed via steps.
+let currentDayBeingBuiltBySteps = null; // String "YYYY-MM-DD", the date of the k-line being built.
+let strideModeActive = false; // Boolean, true if stepping is active for the current day.
+
 
 // 动画播放相关变量
 let isPlaying = false; // 是否正在播放
@@ -1771,397 +1771,472 @@ function getLastKlineDate() {
     return date.toISOString().split('T')[0];
 }
 
-// 新的键盘事件处理函数（带步幅选择）
-function handleKeyboardEventWithStride(event) {
-    // 处理右方向键和左方向键
+// Main keyboard event handler
+function handleKeyboardEvent(event) {
     if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-        event.preventDefault(); // 阻止默认行为
+        event.preventDefault(); // Prevent default browser action (scrolling)
 
         const isRightKey = event.key === 'ArrowRight';
-        logToFile('INFO', `🔑 检测到${isRightKey ? '右' : '左'}方向键按下`);
-        console.log('键盘事件触发，按键:', event.key);
+        logToFile('INFO', `🔑 Detected ${isRightKey ? 'Right' : 'Left'} arrow key press`);
 
         if (isRightKey) {
-            // 获取当前步幅选择
             const strideSelect = document.getElementById('stride');
             const periodSelect = document.getElementById('period');
-            
+
             if (!strideSelect || !periodSelect) {
-                console.error('步幅或周期选择元素未找到');
-                addNextKline();
+                console.error('Stride or period select element not found.');
+                addNextFullKline(); // Fallback to adding a full k-line
                 return;
             }
 
-            const selectedStride = parseInt(strideSelect.value) || 0;
-            const selectedPeriod = periodSelect.value;
-            
-            console.log('当前步幅:', selectedStride, '当前周期:', selectedPeriod);
-            
-            // 如果是日线且选择了步幅
-            if (selectedPeriod === 'D' && selectedStride > 0) {
-                strideTarget = selectedStride;
-                logToFile('INFO', `🚀 启用步幅功能，步幅为${selectedStride}`);
-                strideEnabled = true;
-                addNextKlineStride(strideEnabled,strideTarget);
+            const selectedStrideValue = parseInt(strideSelect.value); // e.g., 240, 120, 60...
+            const selectedPeriodValue = periodSelect.value; // e.g., 'D', '60', '30'...
+
+            logToFile('INFO', `Selected period: ${selectedPeriodValue}, Selected stride: ${selectedStrideValue} min`);
+
+            if (selectedPeriodValue === 'D') { // Stride logic only applies to Daily period
+                if (selectedStrideValue === 240) {
+                    logToFile('INFO', 'Stride is 240min (full day). Resetting stride mode and adding next full k-line.');
+                    strideModeActive = false;
+                    currentStrideInMinutes = 0;
+                    minuteDataForStepping = [];
+                    currentDayBeingBuiltBySteps = null;
+                    addNextFullKline(); // This function handles adding a new complete k-line
+                } else {
+                    logToFile('INFO', `Stride is ${selectedStrideValue}min. Activating stride mode.`);
+                    strideModeActive = true; // processDailyKlineStep will use this
+                    processDailyKlineStep(selectedStrideValue);
+                }
             } else {
-                // 非日线或未选择步幅，保持原有逻辑
-                strideEnabled = false;
-                addNextKline();
+                // For non-Daily periods, stride functionality is disabled. Add next k-line based on period.
+                logToFile('INFO', `Period is ${selectedPeriodValue} (not Daily). Resetting stride mode and adding next full k-line for this period.`);
+                strideModeActive = false;
+                currentStrideInMinutes = 0;
+                minuteDataForStepping = [];
+                currentDayBeingBuiltBySteps = null;
+                addNextFullKline(); // Add next k-line according to the selected period (e.g., next 60min bar)
             }
         } else {
-            // 左方向键逻辑保持不变
-            // ...
+            // Left arrow key: (Placeholder for future functionality, e.g., remove last k-line or navigate back)
+            logToFile('INFO', '⬅️ Left arrow key pressed. Functionality not implemented yet.');
         }
     }
 }
 
-// 旧的键盘事件处理函数（保留兼容）
-function handleKeyboardEvent(event) {
-    // 处理右方向键和左方向键
-    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
-        event.preventDefault(); // 阻止默认行为
 
-        const isRightKey = event.key === 'ArrowRight';
-        logToFile('INFO', `🔑 检测到${isRightKey ? '右' : '左'}方向键按下`);
+// Helper function to aggregate specified number of minutes from source data
+function aggregateMinutes(sourceMinuteData, countMinutes, targetDayDateStr) {
+    if (!sourceMinuteData || sourceMinuteData.length === 0 || countMinutes === 0) {
+        logToFile('WARN', 'aggregateMinutes: No source data or zero minutes to aggregate.', { sourceLength: sourceMinuteData?.length, countMinutes });
+        return null;
+    }
 
-        if (isRightKey) {
-            // 右方向键：添加下一根K线
-            addNextKline();
-        } else {
-            // 左方向键：移除最后一根K线（如果需要的话）
-            // 这里可以实现向前导航的逻辑
-            logToFile('INFO', '⬅️ 左方向键功能暂未实现');
+    const dataToAggregate = sourceMinuteData.slice(0, Math.min(countMinutes, sourceMinuteData.length));
+    
+    if (dataToAggregate.length === 0) {
+        logToFile('WARN', 'aggregateMinutes: No data to aggregate after slicing.', { countMinutes, sourceLength: sourceMinuteData.length });
+        return null;
+    }
+
+    const open = dataToAggregate[0].open;
+    const close = dataToAggregate[dataToAggregate.length - 1].close;
+    const high = Math.max(...dataToAggregate.map(d => d.high));
+    const low = Math.min(...dataToAggregate.map(d => d.low));
+    const volume = dataToAggregate.reduce((sum, d) => sum + d.volume, 0);
+
+    // For daily representation, the k-line's date should be the day itself,
+    // and the time component can be standardized (e.g., market close or 00:00:00).
+    // The `time` property for lightweight-charts should be a UNIX timestamp (seconds).
+    // The `date` string is for reference and API communication.
+    const aggregatedDateObject = new Date(`${targetDayDateStr} 15:00:00`); // Market close time
+
+    logToFile('INFO', 'aggregateMinutes: Aggregation successful.', {
+        aggregatedDate: aggregatedDateObject.toISOString(),
+        open, high, low, close, volume,
+        minutesAggregated: dataToAggregate.length
+    });
+
+    return {
+        date: `${targetDayDateStr} 15:00:00`, // String date for display/logging
+        time: aggregatedDateObject.getTime() / 1000, // UNIX timestamp for the chart
+        open, high, low, close, volume
+    };
+}
+
+
+async function processDailyKlineStep(stepToAddInMinutes) {
+    logToFile('INFO', `processDailyKlineStep: Called with stepToAdd ${stepToAddInMinutes}min.`);
+    const stockCode = document.getElementById('stockCode').value;
+
+    // a. Identify/Prepare Target K-Line & Fetch minute data if needed
+    if (currentStrideInMinutes === 0) { // Start of a new stepping cycle for a day
+        if (allCandleData.length === 0) {
+            logToFile('ERROR', 'processDailyKlineStep: allCandleData is empty. Initial data must be loaded.');
+            alert("请先加载K线数据。");
+            return;
         }
+        // currentDayBeingBuiltBySteps should point to the date of the k-line we intend to build/update.
+        // If strideModeActive was false, and now it's true, this is the first step for the current last k-line.
+        // If currentStrideInMinutes is 0 because a 240min cycle just finished,
+        // then currentDayBeingBuiltBySteps should advance to the next trading day.
+
+        const lastKlineInChart = allCandleData[allCandleData.length - 1];
+        let dateToFetch = lastKlineInChart.date.split(' ')[0];
+
+        if (currentDayBeingBuiltBySteps && getNextTradingDay(currentDayBeingBuiltBySteps) === dateToFetch && minuteDataForStepping.length === 0) {
+            // This implies we finished a day, and addNextFullKline might have added the next day already.
+            // We are now starting to step into this new day.
+             currentDayBeingBuiltBySteps = dateToFetch;
+        } else if (!currentDayBeingBuiltBySteps || currentStrideInMinutes === 0 && minuteDataForStepping.length === 0 ) {
+            // This is the first time stepping for this day or we reset after 240min.
+            // If currentDayBeingBuiltBySteps was set and we completed its 240min, advance it.
+            if (currentDayBeingBuiltBySteps) { // Was stepping before, completed 240min
+                 currentDayBeingBuiltBySteps = getNextTradingDay(currentDayBeingBuiltBySteps);
+                 // We need to ensure allCandleData has this new day.
+                 // This is tricky: addNextFullKline should handle adding the *next* day's placeholder
+                 // if the previous day was fully completed by stepping.
+                 // For now, assume addNextFullKline (called for 240 step) handles this.
+                 // If the last k-line in allCandleData is not currentDayBeingBuiltBySteps, it's an issue.
+                 if(allCandleData[allCandleData.length-1].date.split(' ')[0] !== currentDayBeingBuiltBySteps) {
+                    logToFile('WARN', `Mismatch: last k-line is ${allCandleData[allCandleData.length-1].date.split(' ')[0]}, but expected to build ${currentDayBeingBuiltBySteps}. Attempting to use last k-line's day.`);
+                    // This might happen if user switches stride from 240 to <240 for a new day.
+                    // addNextFullKline (for stride 240) should have added the new day.
+                    // So, currentDayBeingBuiltBySteps should align with the last k-line.
+                    currentDayBeingBuiltBySteps = allCandleData[allCandleData.length - 1].date.split(' ')[0];
+                 }
+
+            } else { // Completely fresh start for stepping
+                currentDayBeingBuiltBySteps = lastKlineInChart.date.split(' ')[0];
+            }
+        }
+        // If currentDayBeingBuiltBySteps is still not the last kline, it means we need to add a new day
+        if (allCandleData[allCandleData.length-1].date.split(' ')[0] !== currentDayBeingBuiltBySteps) {
+            // This implies we are stepping into a day that isn't loaded as the last k-line.
+            // This should be handled by addNextFullKline preparing the next day.
+            // As a safety, we might need to call addNextFullKline here if currentDayBeingBuiltBySteps is ahead.
+            logToFile('INFO', `Stepping into a new day ${currentDayBeingBuiltBySteps} not yet at end of allCandleData. Adding it.`);
+            await addNextFullKline(currentDayBeingBuiltBySteps); // Pass target date to addNextFullKline
+            // After addNextFullKline, currentDayBeingBuiltBySteps should match the new last k-line.
+            currentDayBeingBuiltBySteps = allCandleData[allCandleData.length - 1].date.split(' ')[0];
+        }
+
+
+        logToFile('INFO', `processDailyKlineStep: Starting/Restarting step cycle for day: ${currentDayBeingBuiltBySteps}. Fetching minute data.`);
+        try {
+            const apiUrl = `/api/kline?code=${stockCode}&period=1&limit=300&start_date=${currentDayBeingBuiltBySteps}&end_date=${currentDayBeingBuiltBySteps}`;
+            logToFile('INFO', `Fetching minute data from: ${apiUrl}`);
+            const response = await fetch(apiUrl);
+            const rawMinuteData = await response.json();
+
+            if (rawMinuteData.error || !rawMinuteData || rawMinuteData.length === 0) {
+                logToFile('ERROR', `processDailyKlineStep: No minute data found for ${currentDayBeingBuiltBySteps}. Error: ${rawMinuteData.error}`);
+                alert(`无法获取 ${currentDayBeingBuiltBySteps} 的分钟数据。`);
+                currentStrideInMinutes = 0; // Reset
+                strideModeActive = false;
+                return;
+            }
+
+            minuteDataForStepping = rawMinuteData.map(item => ({
+                time: new Date(item.date).getTime() / 1000,
+                open: parseFloat(item.open),
+                high: parseFloat(item.high),
+                low: parseFloat(item.low),
+                close: parseFloat(item.close),
+                volume: parseFloat(item.volume || 0),
+                date: item.date // Keep original date string for reference
+            })).sort((a, b) => a.time - b.time);
+
+            logToFile('INFO', `processDailyKlineStep: Fetched ${minuteDataForStepping.length} minutes for ${currentDayBeingBuiltBySteps}.`);
+        } catch (e) {
+            logToFile('ERROR', `processDailyKlineStep: Failed to fetch minute data for ${currentDayBeingBuiltBySteps}: ${e.message}`);
+            alert(`获取分钟数据失败: ${e.message}`);
+            currentStrideInMinutes = 0; // Reset
+            strideModeActive = false;
+            return;
+        }
+    } else {
+         // We are continuing to step for currentDayBeingBuiltBySteps, minuteDataForStepping should already be loaded.
+        if (!minuteDataForStepping || minuteDataForStepping.length === 0) {
+            logToFile('ERROR', `processDailyKlineStep: Continuing step, but minuteDataForStepping is empty for ${currentDayBeingBuiltBySteps}. This should not happen.`);
+            // Attempt to recover by resetting and trying to fetch.
+            currentStrideInMinutes = 0;
+            strideModeActive = false;
+            // Optionally, try to call processDailyKlineStep again to trigger refetch, or just error out.
+            alert("步进数据错误，请重试或重新加载数据。");
+            return;
+        }
+        logToFile('INFO', `processDailyKlineStep: Continuing step for day: ${currentDayBeingBuiltBySteps}. Accumulated minutes: ${currentStrideInMinutes}.`);
     }
-}
-function addNextKlineStride(strideEnabled, strideTarget) {
-    if (!allCandleData || allCandleData.length === 0) {
-        logToFile('WARN', '⚠️ 没有K线数据，无法添加下一根');
+
+    // b. Accumulate Stride
+    currentStrideInMinutes += stepToAddInMinutes;
+    if (currentStrideInMinutes > 240) {
+        currentStrideInMinutes = 240;
+    }
+    logToFile('INFO', `processDailyKlineStep: Stride accumulated to ${currentStrideInMinutes} min for ${currentDayBeingBuiltBySteps}.`);
+
+    // c. Aggregate K-Line
+    const aggregatedKline = aggregateMinutes(minuteDataForStepping, currentStrideInMinutes, currentDayBeingBuiltBySteps);
+
+    if (!aggregatedKline) {
+        logToFile('ERROR', `processDailyKlineStep: Aggregation failed for ${currentDayBeingBuiltBySteps} with ${currentStrideInMinutes} minutes.`);
+        // Don't reset currentStrideInMinutes here, user might change stride and try again.
         return;
     }
-    let reduceDays = 0;
-    if(currentStride == 240)
-    {
-        reduceDays = 1;
-        currentStride = 0;
+
+    // d. Update Chart
+    if (allCandleData.length > 0) {
+        // Find the k-line in allCandleData that corresponds to currentDayBeingBuiltBySteps
+        // It's typically the last one, but let's be safer.
+        let klineToUpdateIndex = -1;
+        for (let i = allCandleData.length - 1; i >= 0; i--) {
+            if (allCandleData[i].date.startsWith(currentDayBeingBuiltBySteps)) {
+                klineToUpdateIndex = i;
+                break;
+            }
+        }
+
+        if (klineToUpdateIndex === -1) {
+            logToFile('ERROR', `processDailyKlineStep: Could not find k-line for ${currentDayBeingBuiltBySteps} in allCandleData to update.`);
+            // This is a critical error in state management.
+            currentStrideInMinutes = 0; strideModeActive = false; minuteDataForStepping = []; currentDayBeingBuiltBySteps = null;
+            return;
+        }
+
+        const originalKlineToUpdate = allCandleData[klineToUpdateIndex];
+
+        // Update the k-line in allCandleData array
+        allCandleData[klineToUpdateIndex] = {
+            ...originalKlineToUpdate, // Preserve original full-day timestamp and other potential properties
+            open: aggregatedKline.open,
+            high: aggregatedKline.high,
+            low: aggregatedKline.low,
+            close: aggregatedKline.close,
+            volume: aggregatedKline.volume,
+            // The `date` string of originalKlineToUpdate should already be the daily date string.
+        };
+
+        // Update the chart series
+        candleSeries.update({
+            time: originalKlineToUpdate.time, // Use the original k-line's timestamp for update
+            open: aggregatedKline.open,
+            high: aggregatedKline.high,
+            low: aggregatedKline.low,
+            close: aggregatedKline.close,
+        });
+        volumeSeries.update({
+            time: originalKlineToUpdate.time,
+            value: aggregatedKline.volume,
+            color: aggregatedKline.close >= aggregatedKline.open ? 'rgba(0, 150, 136, 0.8)' : 'rgba(255, 82, 82, 0.8)'
+        });
+        updateMovingAveragesForNewKline(); // Recalculate MAs based on the updated allCandleData
+        logToFile('INFO', `processDailyKlineStep: Updated k-line on chart for ${currentDayBeingBuiltBySteps} with ${currentStrideInMinutes} min aggregation.`);
+
+        // Update the end date display to the current day being built
+        updateEndDateFromKline(currentDayBeingBuiltBySteps + " 00:00:00");
+
+
+    } else {
+        logToFile('ERROR', 'processDailyKlineStep: allCandleData is empty, cannot update chart for step.');
     }
-    else if(currentStride == 0)
-    {
-        reduceDays = 1;
+
+    // e. Handle Cycle Completion
+    if (currentStrideInMinutes === 240) {
+        logToFile('INFO', `processDailyKlineStep: 240 minute cycle completed for ${currentDayBeingBuiltBySteps}.`);
+        currentStrideInMinutes = 0;
+        minuteDataForStepping = []; // Clear, will be refetched if stepping continues for the next day
+        // currentDayBeingBuiltBySteps will be advanced on the next call to this function if currentStrideInMinutes is 0
+        // strideModeActive remains true, as the user might want to continue stepping.
+        // If the user selects 240min stride next, it will call addNextFullKline and reset strideModeActive.
     }
-    else{
-        reduceDays = 2;
-    }
-    const currentPeriod = document.getElementById('period').value;
-    const lastKline = allCandleData[allCandleData.length - reduceDays];
-    
-    // 使用新的基于数据的方法查找下一根K线
-    findNextKlineFromDataStride(lastKline, currentPeriod,strideEnabled, strideTarget);
 }
 
-// 添加下一根K线
-function addNextKline() {
+
+// Renamed addNextKline to addNextFullKline to avoid confusion with stepping logic
+// This function is responsible for adding a complete new k-line (e.g., a full day, or a full period bar)
+async function addNextFullKline(targetDate = null) {
+    logToFile('INFO', `addNextFullKline: Called. Target date: ${targetDate}`);
     if (!allCandleData || allCandleData.length === 0) {
-        logToFile('WARN', '⚠️ 没有K线数据，无法添加下一根');
+        logToFile('WARN', 'addNextFullKline: No k-line data available to determine the next k-line.');
         return;
     }
-    
+
+    // Reset stride mode variables as we are adding a full k-line
+    strideModeActive = false;
+    currentStrideInMinutes = 0;
+    minuteDataForStepping = [];
+    // currentDayBeingBuiltBySteps will be updated after the new k-line is added.
 
     const currentPeriod = document.getElementById('period').value;
     const lastKline = allCandleData[allCandleData.length - 1];
+    let dateToUpdateUiWith = null;
 
-    console.log('🔍 开始查找下一根K线:', {
-        currentPeriod: currentPeriod,
-        lastKlineDate: lastKline.date,
-        lastKlineTime: new Date(lastKline.time * 1000).toISOString(),
-        allCandleDataLength: allCandleData.length,
-        lastKlineTimestamp: lastKline.time
-    });
+    logToFile('INFO', `addNextFullKline: Last k-line is ${lastKline.date} (Time: ${lastKline.time}). Period: ${currentPeriod}.`);
 
-    // 验证我们获取的确实是最后一根K线
-    console.log('🔍 验证最后几根K线:', allCandleData.slice(-3).map(k => ({
-        date: k.date,
-        time: new Date(k.time * 1000).toISOString()
-    })));
+    await findNextKlineFromData(lastKline, currentPeriod, targetDate);
 
-    // 使用新的基于数据的方法查找下一根K线
-    findNextKlineFromData(lastKline, currentPeriod);
-}
-async function findNextKlineFromDataStride(lastKline, period, strideEnabled, strideTarget) {
-    
-    if(currentStride == 0)
-    {
-        const stockCode = document.getElementById('stockCode').value.trim();
-        if (!stockCode) {
-            logToFile('ERROR', '❌ 股票代码为空');
-            return;
-        }
-        // 获取当前截止日期
-        const endDateInput = document.getElementById('endDate');
-        const currentEndDate = endDateInput.value;
-
-        // 获取最后一根K线的日期
-        const lastKlineDate = lastKline.date ? lastKline.date.split(' ')[0] : new Date(lastKline.time * 1000).toISOString().split('T')[0];
-
-        console.log('📅 智能计算下一根K线:', {
-            currentEndDate: currentEndDate,
-            lastKlineDate: lastKlineDate,
-            period: period
-        });
-
-        // 为了获取足够的数据，我们需要请求包含下一个交易日的数据
-        const nextTradingDay = getNextTradingDay(currentEndDate);
-        console.log('📅 请求数据到下一个交易日以确保有足够数据:', nextTradingDay);
-
-        console.log('📅 查找下一根K线:', {
-            currentEndDate: currentEndDate,
-            nextTradingDay: nextTradingDay,
-            period: period
-        });
-
-        if (!nextTradingDay) {
-            logToFile('ERROR', '❌ 无法计算下一个交易日');
-            return;
-        }
-
-        // 请求包含下一个交易日的数据，确保有足够的分钟数据
-        try {
-            const apiUrl = '/api/kline?code=${stockCode}&period=1&limit=1000&end_date=${nextTradingDay}';
-            console.log('🌐 请求包含下一个交易日的分钟数据:', apiUrl);
-
-            const response = await fetch(apiUrl);
-            if (!response.ok) {
-                throw new Error(`网络请求错误: ${response.status} ${response.statusText}`);
-            }
-
-            const minuteData = await response.json();
-            strideData = minuteData;
-            if (minuteData && minuteData.length > 0) {
-                console.log('✅ 获取到下一个交易日的分钟数据:', minuteData.length, '条');
-
-                // 检查分钟数据的日期范围
-                console.log('📅 分钟数据日期范围:');
-                console.log('  第一条:', minuteData[0].date);
-                console.log('  最后一条:', minuteData[minuteData.length - 1].date);
-                console.log('  期望日期: 2025-02-10');
-
-                // 从分钟数据中聚合出下一根K线
-                let nextKline;
-                if(strideTarget == 240)
-                {
-                    // 日线：直接使用新的日线聚合函数
-                    nextKline = aggregateNextDailyKline(minuteData, lastKlineDate);
-                }
-                else 
-                {
-                    currentStride += strideTarget;
-                    // 其他周期：使用原有逻辑
-                    nextKline = aggregateNextKlineFromMinuteData(minuteData, period, lastKline, currentStride);
-                }
-
-                if (nextKline) {
-                    console.log('✅ 聚合出的新K线:', nextKline);
-
-                    // 验证新K线的时间戳是否正确
-                    // 使用与addKlineToChart相同的时间戳转换逻辑
-                    let newKlineTimestamp;
-                    if (period === '1') {
-                        newKlineTimestamp = new Date(nextKline.date).getTime() / 1000;
-                    } else {
-                        // 使用UTC时间但加上8小时偏移，这样显示时会正确
-                        const dateTime = nextKline.date.replace(' ', 'T');
-                        const localDate = new Date(dateTime);
-                        // 减去8小时的偏移，这样TradingView显示时会加回8小时
-                        newKlineTimestamp = (localDate.getTime() + 8 * 60 * 60 * 1000) / 1000;
-                    }
-
-                    console.log('🕐 新K线时间戳转换详细信息:');
-                    console.log('  原始日期:', nextKline.date);
-                    console.log('  转换后的dateTime:', nextKline.date.replace(' ', 'T'));
-                    console.log('  新K线时间戳:', newKlineTimestamp);
-                    console.log('  转换回的日期:', new Date(newKlineTimestamp * 1000).toISOString());
-                    console.log('  期望的日期应该根据当前K线计算');
-
-                    const lastKlineTimestamp = allCandleData[allCandleData.length - 1].time;
-                    strideLastKlineTimestamp = lastKlineTimestamp;
-                    const comparisonResult = {
-                        lastKlineTimestamp: lastKlineTimestamp,
-                        lastKlineDate: new Date(lastKlineTimestamp * 1000).toISOString(),
-                        newKlineTimestamp: newKlineTimestamp,
-                        newKlineDate: new Date(newKlineTimestamp * 1000).toISOString(),
-                        isNewer: newKlineTimestamp > lastKlineTimestamp
-                    };
-
-                    console.log('🕐 时间戳比较详细信息:');
-                    console.log('  最后一根K线时间戳:', lastKlineTimestamp, '→', new Date(lastKlineTimestamp * 1000).toISOString());
-                    console.log('  新K线时间戳:', newKlineTimestamp, '→', new Date(newKlineTimestamp * 1000).toISOString());
-                    console.log('  新K线是否更新:', newKlineTimestamp > lastKlineTimestamp);
-                    console.log('  时间差（秒）:', newKlineTimestamp - lastKlineTimestamp);
-
-                    if (newKlineTimestamp > lastKlineTimestamp) {
-                        // 添加到图表
-                        addKlineToChart(nextKline, period);
-
-                        // 更新截止日期
-                        updateEndDateFromKline(nextKline.date);
-
-                        logToFile('INFO', '✅ 成功添加下一根K线');
-                    } else {
-                        logToFile('ERROR', '❌ 新K线时间戳不正确，无法添加');
-                    }
-                } else {
-                    logToFile('WARN', '⚠️ 无法从分钟数据聚合出K线');
-                }
-            } else {
-                logToFile('WARN', '⚠️ 下一个交易日没有数据');
-            }
-
-        } catch (error) {
-            logToFile('ERROR', '❌ 获取下一个交易日数据失败:', error);
+    if (allCandleData.length > 0) {
+        const newLastKline = allCandleData[allCandleData.length - 1];
+        dateToUpdateUiWith = newLastKline.date;
+        if (currentPeriod === 'D') {
+            currentDayBeingBuiltBySteps = newLastKline.date.split(' ')[0];
+            logToFile('INFO', `addNextFullKline: currentDayBeingBuiltBySteps updated to ${currentDayBeingBuiltBySteps}.`);
+        } else {
+            currentDayBeingBuiltBySteps = null;
         }
     }
-    else
-    {
-        currentStride += strideTarget;
-        let nextKline = aggregateNextKlineFromMinuteData(strideData, period, lastKline, 240);
-        currentStride = 240;
-        UpdateLastKlineToChart(nextKline, period);
-        // 其他周期：使用原有逻辑
+
+    if(dateToUpdateUiWith) {
+        updateEndDateFromKline(dateToUpdateUiWith); // Update UI with the date of the k-line actually added/updated.
+    } else if (targetDate) {
+        updateEndDateFromKline(targetDate + " 00:00:00"); // Fallback to targetDate if no new k-line info
     }
 }
 
-// 基于现有数据查找下一根K线
-async function findNextKlineFromData(lastKline, period) {
+
+// Based on existing findNextKlineFromData, modified to accept an optional targetDate
+async function findNextKlineFromData(lastKline, period, specificDateToFetch = null) {
     const stockCode = document.getElementById('stockCode').value.trim();
-
     if (!stockCode) {
-        logToFile('ERROR', '❌ 股票代码为空');
+        logToFile('ERROR', 'findNextKlineFromData: Stock code is empty.');
         return;
     }
 
-    // 获取当前截止日期
-    const endDateInput = document.getElementById('endDate');
-    const currentEndDate = endDateInput.value;
+    let dateForApiCall;
+    let aggregationBaseDate;
 
-    // 获取最后一根K线的日期
-    const lastKlineDate = lastKline.date ? lastKline.date.split(' ')[0] : new Date(lastKline.time * 1000).toISOString().split('T')[0];
+    if (specificDateToFetch) {
+        dateForApiCall = specificDateToFetch;
+        aggregationBaseDate = getPreviousTradingDay(specificDateToFetch);
+        logToFile('INFO', `findNextKlineFromData: Fetching specific date ${dateForApiCall}. Aggregation base: ${aggregationBaseDate}`);
+    } else {
+        const currentEndDateVal = document.getElementById('endDate').value;
+        let referenceDateForNext = lastKline.date.split(' ')[0]; // Default to last k-line's date
+        if (isValidDateString(currentEndDateVal) && new Date(currentEndDateVal) >= new Date(referenceDateForNext)) {
+             // Only use UI end date if it's valid and not before the last k-line date.
+            referenceDateForNext = currentEndDateVal;
+        }
+        dateForApiCall = getNextTradingDay(referenceDateForNext);
+        aggregationBaseDate = referenceDateForNext; // This is the day *before* dateForApiCall
+        logToFile('INFO', `findNextKlineFromData: Calculating next trading day from ${referenceDateForNext}. API call for: ${dateForApiCall}. Aggregation base: ${aggregationBaseDate}`);
+    }
 
-    console.log('📅 智能计算下一根K线:', {
-        currentEndDate: currentEndDate,
-        lastKlineDate: lastKlineDate,
-        period: period
-    });
-
-    // 为了获取足够的数据，我们需要请求包含下一个交易日的数据
-    const nextTradingDay = getNextTradingDay(currentEndDate);
-    console.log('📅 请求数据到下一个交易日以确保有足够数据:', nextTradingDay);
-
-    console.log('📅 查找下一根K线:', {
-        currentEndDate: currentEndDate,
-        nextTradingDay: nextTradingDay,
-        period: period
-    });
-
-    if (!nextTradingDay) {
-        logToFile('ERROR', '❌ 无法计算下一个交易日');
+    if (!dateForApiCall) {
+        logToFile('ERROR', `findNextKlineFromData: Could not determine target date for API call. Original lastKline date: ${lastKline.date}, Period: ${period}`);
         return;
     }
 
-    // 请求包含下一个交易日的数据，确保有足够的分钟数据
+    logToFile('INFO', `findNextKlineFromData: Requesting minute data for date: ${dateForApiCall} (aggregation base: ${aggregationBaseDate})`);
+
     try {
-        const apiUrl = `/api/kline?code=${stockCode}&period=1&limit=1000&end_date=${nextTradingDay}`;
-        console.log('🌐 请求包含下一个交易日的分钟数据:', apiUrl);
+        // Always fetch 1-minute data; aggregation to the target 'period' happens client-side.
+        const apiUrl = `/api/kline?code=${stockCode}&period=1&limit=300&start_date=${dateForApiCall}&end_date=${dateForApiCall}`;
+        logToFile('DEBUG', `findNextKlineFromData: API URL: ${apiUrl}`);
 
         const response = await fetch(apiUrl);
         if (!response.ok) {
-            throw new Error(`网络请求错误: ${response.status} ${response.statusText}`);
+            throw new Error(`Network request error: ${response.status} ${response.statusText}`);
         }
-
         const minuteData = await response.json();
 
         if (minuteData && minuteData.length > 0) {
-            console.log('✅ 获取到下一个交易日的分钟数据:', minuteData.length, '条');
+            logToFile('INFO', `findNextKlineFromData: Received ${minuteData.length} minute data points for ${dateForApiCall}.`);
 
-            // 检查分钟数据的日期范围
-            console.log('📅 分钟数据日期范围:');
-            console.log('  第一条:', minuteData[0].date);
-            console.log('  最后一条:', minuteData[minuteData.length - 1].date);
-            console.log('  期望日期: 2025-02-10');
-
-            // 从分钟数据中聚合出下一根K线
-            let nextKline;
+            let nextKlineAggregated;
             if (period === 'D') {
-                // 日线：直接使用新的日线聚合函数
-                nextKline = aggregateNextDailyKline(minuteData, lastKlineDate);
+                // For daily, aggregate all minutes of dateForApiCall.
+                // aggregateNextDailyKline expects minuteData and the *previous* day's date.
+                nextKlineAggregated = aggregateNextDailyKline(minuteData, aggregationBaseDate);
             } else {
-                // 其他周期：使用原有逻辑
-                nextKline = aggregateNextKlineFromMinuteData(minuteData, period, lastKline);
+                // For other periods (e.g., '60', '30'), use aggregateNextKlineFromMinuteData.
+                // This function needs the full minute data of the day, the target period, and the last k-line of the *previous* period.
+                // This part might be complex if lastKline isn't correctly representing the end of the previous sub-daily period.
+                // For simplicity, if period is not 'D', we might be misusing this function if called from addNextFullKline
+                // unless addNextFullKline is context-aware (e.g. knows it's adding the next 60-min bar).
+                // The current design of addNextFullKline implies it's for the *selected* chart period.
+                logToFile('INFO', `findNextKlineFromData: Aggregating for period ${period} using minute data of ${dateForApiCall}. Last k-line date: ${lastKline.date}`);
+                nextKlineAggregated = aggregateNextKlineFromMinuteData(minuteData, period, lastKline);
             }
 
-            if (nextKline) {
-                console.log('✅ 聚合出的新K线:', nextKline);
+            if (nextKlineAggregated) {
+                logToFile('INFO', `findNextKlineFromData: Successfully aggregated to new k-line: ${JSON.stringify(nextKlineAggregated)}`);
 
-                // 验证新K线的时间戳是否正确
-                // 使用与addKlineToChart相同的时间戳转换逻辑
+                // Check if this k-line (by date part) is already the last one in allCandleData.
+                // This can happen if specificDateToFetch was the date of the last k-line.
+                const newKlineDateStr = nextKlineAggregated.date.split(' ')[0];
+                if (allCandleData.length > 0) {
+                    const lastExistingKlineDateStr = allCandleData[allCandleData.length -1].date.split(' ')[0];
+                    if (newKlineDateStr === lastExistingKlineDateStr && specificDateToFetch) {
+                         logToFile('INFO', `findNextKlineFromData: Aggregated k-line for ${newKlineDateStr} is already the last in chart. Updating it instead of adding new.`);
+                         // Update existing k-line instead of adding a duplicate day.
+                         // This is crucial if specificDateToFetch was used to "complete" a day.
+                         const klineToUpdate = allCandleData[allCandleData.length -1];
+                         klineToUpdate.open = nextKlineAggregated.open;
+                         klineToUpdate.high = nextKlineAggregated.high;
+                         klineToUpdate.low = nextKlineAggregated.low;
+                         klineToUpdate.close = nextKlineAggregated.close;
+                         klineToUpdate.volume = nextKlineAggregated.volume;
+                         // Date and time should remain the same as it's an update to the daily bar.
+                         candleSeries.update(klineToUpdate);
+                         volumeSeries.update({
+                            time: klineToUpdate.time,
+                            value: klineToUpdate.volume,
+                            color: klineToUpdate.close >= klineToUpdate.open ? 'rgba(0, 150, 136, 0.8)' : 'rgba(255, 82, 82, 0.8)'
+                         });
+                         updateMovingAveragesForNewKline();
+                         updateEndDateFromKline(klineToUpdate.date);
+                         return; // Exit after update
+                    }
+                }
+
+
+                // Convert date to timestamp for chart addition
                 let newKlineTimestamp;
-                if (period === '1') {
-                    newKlineTimestamp = new Date(nextKline.date).getTime() / 1000;
-                } else {
-                    // 使用UTC时间但加上8小时偏移，这样显示时会正确
-                    const dateTime = nextKline.date.replace(' ', 'T');
-                    const localDate = new Date(dateTime);
-                    // 减去8小时的偏移，这样TradingView显示时会加回8小时
-                    newKlineTimestamp = (localDate.getTime() + 8 * 60 * 60 * 1000) / 1000;
+                // For daily k-lines from aggregation, use the specific date's timestamp (e.g., market close).
+                // For other periods, the aggregation function should provide a suitable date string.
+                const klineDateTime = new Date(nextKlineAggregated.date); // Date string from aggregation
+                if (period === '1') { // 1-minute data uses its own precise timestamp
+                    newKlineTimestamp = klineDateTime.getTime() / 1000;
+                } else { // For D, 60, 30, etc., the date string might be like "YYYY-MM-DD HH:MM:SS"
+                         // We need to ensure this is consistent with how timestamps are handled.
+                         // The +8 hours offset was for display with TradingView light-charts if dates were pure UTC.
+                         // Since dates from backend now include time, this might need adjustment.
+                         // For now, let's assume the date string from aggregation is directly convertible.
+                    newKlineTimestamp = (klineDateTime.getTime() + 8 * 60 * 60 * 1000) / 1000; // Existing logic for non-1m
+                }
+                logToFile('DEBUG', `findNextKlineFromData: New k-line timestamp: ${newKlineTimestamp} from date ${nextKlineAggregated.date}`);
+
+                // Ensure the new k-line is actually newer than the last one in the chart, unless it's a specificDateFetch scenario
+                // where we might be filling a known future date.
+                let shouldAdd = true;
+                if (allCandleData.length > 0 && !specificDateToFetch) {
+                    const lastChartKlineTime = allCandleData[allCandleData.length - 1].time;
+                    if (newKlineTimestamp <= lastChartKlineTime) {
+                        logToFile('WARN', `findNextKlineFromData: New k-line's time (${newKlineTimestamp}) is not after last chart k-line's time (${lastChartKlineTime}). Skipping add.`);
+                        shouldAdd = false;
+                    }
                 }
 
-                console.log('🕐 新K线时间戳转换详细信息:');
-                console.log('  原始日期:', nextKline.date);
-                console.log('  转换后的dateTime:', nextKline.date.replace(' ', 'T'));
-                console.log('  新K线时间戳:', newKlineTimestamp);
-                console.log('  转换回的日期:', new Date(newKlineTimestamp * 1000).toISOString());
-                console.log('  期望的日期应该根据当前K线计算');
-
-                const lastKlineTimestamp = allCandleData[allCandleData.length - 1].time;
-
-                const comparisonResult = {
-                    lastKlineTimestamp: lastKlineTimestamp,
-                    lastKlineDate: new Date(lastKlineTimestamp * 1000).toISOString(),
-                    newKlineTimestamp: newKlineTimestamp,
-                    newKlineDate: new Date(newKlineTimestamp * 1000).toISOString(),
-                    isNewer: newKlineTimestamp > lastKlineTimestamp
-                };
-
-                console.log('🕐 时间戳比较详细信息:');
-                console.log('  最后一根K线时间戳:', lastKlineTimestamp, '→', new Date(lastKlineTimestamp * 1000).toISOString());
-                console.log('  新K线时间戳:', newKlineTimestamp, '→', new Date(newKlineTimestamp * 1000).toISOString());
-                console.log('  新K线是否更新:', newKlineTimestamp > lastKlineTimestamp);
-                console.log('  时间差（秒）:', newKlineTimestamp - lastKlineTimestamp);
-
-                if (newKlineTimestamp > lastKlineTimestamp) {
-                    // 添加到图表
-                    addKlineToChart(nextKline, period);
-
-                    // 更新截止日期
-                    updateEndDateFromKline(nextKline.date);
-
-                    logToFile('INFO', '✅ 成功添加下一根K线');
-                } else {
-                    logToFile('ERROR', '❌ 新K线时间戳不正确，无法添加');
+                if (shouldAdd) {
+                    addKlineToChart(nextKlineAggregated, period); // addKlineToChart handles allCandleData and chart updates
+                    // updateEndDateFromKline(nextKlineAggregated.date); // Done by addNextFullKline or processDailyKlineStep
+                    logToFile('INFO', 'findNextKlineFromData: Successfully added new k-line to chart.');
                 }
+
             } else {
-                logToFile('WARN', '⚠️ 无法从分钟数据聚合出K线');
+                logToFile('WARN', `findNextKlineFromData: Could not aggregate minute data for ${dateForApiCall} to period ${period}.`);
             }
         } else {
-            logToFile('WARN', '⚠️ 下一个交易日没有数据');
+            logToFile('WARN', `findNextKlineFromData: No minute data received for ${dateForApiCall}.`);
         }
-
     } catch (error) {
-        logToFile('ERROR', '❌ 获取下一个交易日数据失败:', error);
+        logToFile('ERROR', `findNextKlineFromData: Error fetching or processing data for ${dateForApiCall}: ${error.message}`);
+        console.error("Error in findNextKlineFromData: ", error);
     }
 }
 
-// 从分钟数据聚合出下一根K线
-function aggregateNextKlineFromMinuteData(minuteData, period, lastKline, minutes = 0) {
+// From分钟数据聚合出下一根K线
+function aggregateNextKlineFromMinuteData(minuteData, period, lastKline) {
     if (!minuteData || minuteData.length === 0) {
         return null;
     }
