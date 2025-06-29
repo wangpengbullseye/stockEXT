@@ -3271,17 +3271,17 @@ class DrawingTool {
 
     // 查找捕捉点（改进版，带详细日志）
     findSnapPoint(time, price, screenPoint) {
-        console.log(`🎯 开始捕捉点计算: 鼠标(${screenPoint.x}, ${screenPoint.y}), 时间=${time}, 价格=${price.toFixed(4)}`);
+        //console.log(`🎯 开始捕捉点计算: 鼠标(${screenPoint.x}, ${screenPoint.y}), 时间=${time}, 价格=${price.toFixed(4)}`);
 
         // 验证输入参数
         if (!time || !price || !screenPoint) {
-            console.log('  ❌ 输入参数无效');
+            //console.log('  ❌ 输入参数无效');
             return { time, price, isSnapped: false };
         }
 
         // 获取当前时间附近的K线数据，并按时间距离排序
         const nearbyCandles = this.getNearbyCandles(time);
-        console.log(`  📊 找到 ${nearbyCandles.length} 根附近的K线`);
+        //console.log(`  📊 找到 ${nearbyCandles.length} 根附近的K线`);
 
         // 按时间距离排序，优先检查最近的K线
         nearbyCandles.sort((a, b) => {
@@ -3297,7 +3297,7 @@ class DrawingTool {
         };
         let minDistance = this.snapDistance;
 
-        console.log(`  🎯 捕捉距离阈值: ${minDistance}px`);
+        //console.log(`  🎯 捕捉距离阈值: ${minDistance}px`);
 
         for (const candle of nearbyCandles) {
             // 验证K线数据有效性
@@ -3312,7 +3312,7 @@ class DrawingTool {
             if (candleScreenX === null) continue;
 
             const timeDistance = Math.abs(screenPoint.x - candleScreenX);
-            console.log(`    K线时间=${candle.time}, 屏幕X=${candleScreenX}, 时间距离=${timeDistance.toFixed(1)}px`);
+            //console.log(`    K线时间=${candle.time}, 屏幕X=${candleScreenX}, 时间距离=${timeDistance.toFixed(1)}px`);
 
             // 检查所有四个价格点：开盘、收盘、最高、最低
             const pricePoints = [
@@ -3335,7 +3335,7 @@ class DrawingTool {
                     // 计算综合距离（时间 + 价格）
                     const totalDistance = Math.sqrt(timeDistance * timeDistance + priceDistance * priceDistance);
 
-                    console.log(`      ${point.name}=${point.price.toFixed(4)}, 屏幕Y=${screenY.toFixed(1)}, 价格距离=${priceDistance.toFixed(1)}px, 总距离=${totalDistance.toFixed(1)}px`);
+                    //console.log(`      ${point.name}=${point.price.toFixed(4)}, 屏幕Y=${screenY.toFixed(1)}, 价格距离=${priceDistance.toFixed(1)}px, 总距离=${totalDistance.toFixed(1)}px`);
 
                     if (totalDistance < minDistance) {
                         minDistance = totalDistance;
@@ -3348,7 +3348,7 @@ class DrawingTool {
                             candle: candle,
                             distance: totalDistance
                         };
-                        console.log(`      🎯 新的最佳捕捉: ${point.name}, 距离=${totalDistance.toFixed(1)}px`);
+                        //console.log(`      🎯 新的最佳捕捉: ${point.name}, 距离=${totalDistance.toFixed(1)}px`);
                     }
                 }
             }
@@ -3752,55 +3752,105 @@ class TrendLineTool extends DrawingTool {
         return lineData[0].time !== lineData[1].time;
     }
 
-    // 计算射线数据（使用边界交点方法，完全避免缩放问题）
+    // 计算射线数据（在屏幕坐标系中计算交点）
     calculateRayData(point1, point2) {
         try {
-            // 获取图表的可见边界
-            const boundaries = this.getVisibleBoundaries();
-            if (!boundaries) {
+            // 1. 转换到屏幕坐标
+            const screenX1 = this.chart.timeScale().timeToCoordinate(point1.time);
+            const screenY1 = this.candleSeries.priceToCoordinate(point1.price);
+            const screenX2 = this.chart.timeScale().timeToCoordinate(point2.time);
+            console.log('screenX2:'+ screenX2)
+            const timex =  this.chart.timeScale().coordinateToTime(screenX2);
+            console.log('timex:'+ timex)
+            console.log('point2.time:'+point2.time)
+            const screenY2 = this.candleSeries.priceToCoordinate(point2.price);
+            
+            if (screenX1 === null || screenY1 === null || screenX2 === null || screenY2 === null) {
+                throw new Error('无法转换坐标');
+            }
+
+            //const timeRange=this.chart.timeScale().getVisibleRange()
+            //const chartRight = this.chart.timeScale().timeToCoordinate(timeRange);
+            // 2. 计算屏幕边界
+            const chartWidth = this.chart.options().width - 55;
+            
+            const chartHeight = this.chart.options().height;
+            
+            const screenBoundaries = {
+                left: 0,
+                right: chartWidth,
+                top: 0,
+                bottom: chartHeight
+            };
+
+            // 3. 计算射线斜率
+            const deltaX = screenX2 - screenX1;
+            const deltaY = screenY2 - screenY1;
+            
+            if (deltaX === 0) {
+                // 垂直线
                 return [
                     { time: point1.time, value: point1.price },
                     { time: point2.time, value: point2.price }
                 ];
             }
 
-            // 计算射线的方向向量
-            const deltaTime = point2.time - point1.time;
-            const deltaPrice = point2.price - point1.price;
+            const slope = deltaY / deltaX;
+            const isRightward = deltaX > 0;
 
-            if (deltaTime === 0) {
-                // 垂直线情况：与上下边界求交点
-                const intersectionTop = { time: point1.time, value: boundaries.maxPrice };
-                const intersectionBottom = { time: point1.time, value: boundaries.minPrice };
-
-                return [
-                    intersectionBottom,
-                    { time: point1.time, value: point1.price },
-                    { time: point2.time, value: point2.price },
-                    intersectionTop
-                ];
+            // 4. 计算与屏幕边界的交点
+            let intersectionX, intersectionY;
+            
+            if (isRightward) {
+                // 向右射线：与右边界相交
+                intersectionX = screenBoundaries.right-1;
+                intersectionY = screenY1 + slope * (intersectionX - screenX1);
+                
+                // 检查是否先与上/下边界相交
+                if (slope > 0 && intersectionY > screenBoundaries.bottom) {
+                    intersectionY = screenBoundaries.bottom;
+                    intersectionX = screenX1 + (intersectionY - screenY1) / slope;
+                } else if (slope < 0 && intersectionY < screenBoundaries.top) {
+                    intersectionY = screenBoundaries.top;
+                    intersectionX = screenX1 + (intersectionY - screenY1) / slope;
+                }
+            } else {
+                // 向左射线：与左边界相交
+                intersectionX = screenBoundaries.left;
+                intersectionY = screenY1 + slope * (intersectionX - screenX1);
+                
+                // 检查是否先与上/下边界相交
+                if (slope < 0 && intersectionY > screenBoundaries.bottom) {
+                    intersectionY = screenBoundaries.bottom;
+                    intersectionX = screenX1 + (intersectionY - screenY1) / slope;
+                } else if (slope > 0 && intersectionY < screenBoundaries.top) {
+                    intersectionY = screenBoundaries.top;
+                    intersectionX = screenX1 + (intersectionY - screenY1) / slope;
+                }
             }
 
-            // 计算射线与可见边界的交点
-            const intersection = this.calculateRayBoundaryIntersection(
-                point1, point2, boundaries, deltaTime > 0
-            );
-
-            if (!intersection) {
-                // 如果无法计算交点，返回基本线段
-                return [
-                    { time: point1.time, value: point1.price },
-                    { time: point2.time, value: point2.price }
-                ];
+            // 5. 转换回价格-时间坐标
+            const intersectionTime = this.chart.timeScale().coordinateToTime(intersectionX);
+            const intersectionPrice = this.candleSeries.coordinateToPrice(intersectionY);
+            if (intersectionPrice === null) {
+                throw new Error('无法转换回坐标-price'+intersectionPrice);
             }
-
-            // 创建射线数据：只用起点和边界交点，确保是直线
+            if (intersectionTime === null ) {
+                throw new Error('无法转换回坐标-time:'+intersectionX);
+            }
+  
+            // 6. 创建射线数据
             const rayData = [
                 { time: point1.time, value: point1.price },
-                { time: intersection.time, value: intersection.price }
+                { time: intersectionTime, value: intersectionPrice }
             ];
 
-            console.log(`📏 边界交点射线: 起点(${point1.time}, ${point1.price.toFixed(2)}) -> 交点(${intersection.time}, ${intersection.price.toFixed(2)}) [直线射线]`);
+            console.log('📏 屏幕坐标射线:', {
+                start: { x: screenX1, y: screenY1 },
+                direction: { x: screenX2, y: screenY2 },
+                intersection: { x: intersectionX, y: intersectionY },
+                result: rayData
+            });
 
             return rayData;
 
@@ -3877,7 +3927,7 @@ class TrendLineTool extends DrawingTool {
         }
     }
 
-    // 计算射线与边界的交点（带详细日志）
+    // 这个方法已被删除，因为新的calculateRayData方法在屏幕坐标系中直接计算交点
     calculateRayBoundaryIntersection(point1, point2, boundaries, isRightward) {
         try {
             console.log('🔍 开始计算射线与边界交点:');
@@ -5222,7 +5272,7 @@ function testProfessionalDrawingSystem() {
     drawingToolSystem.activateTool('horizontalLine');
 
     setTimeout(() => {
-        console.log('🔍 激活后状态:', drawingToolSystem.getStatus());
+        console.log('🔍激活后状态:', drawingToolSystem.getStatus());
 
         // 测试模拟鼠标移动
         if (allCandleData.length > 10) {
