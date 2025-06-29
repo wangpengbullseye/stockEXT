@@ -3599,13 +3599,13 @@ class TrendLineTool extends DrawingTool {
                     // 验证数据完整性
                     if (this.validateLineData(previewData)) {
                         this.previewSeries.setData(previewData);
-                        }
+                    }
 
                     // 清除视图更新标记
                     setTimeout(() => {
                         if (window.drawingToolSystem) {
                             window.drawingToolSystem.isViewUpdating = false;
-                    }
+                        }
                     }, 50);
                 }
             }
@@ -4761,7 +4761,7 @@ class DrawingToolSystem {
 
     // 安全的线段距离计算（避免触发视图更新）
     getDistanceToLineSafe(point1, point2, mouseParam, timeScale, priceScale) {
-            try {
+        try {
             // 使用静态坐标转换，避免触发图表更新
             const x1 = timeScale.timeToCoordinate(point1.time);
             const y1 = priceScale.priceToCoordinate(point1.price);
